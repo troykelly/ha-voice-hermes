@@ -113,7 +113,7 @@ jobs:
           work=$(mktemp -d)
           trap 'rm -rf "$work"' EXIT
           mkdir -p "$work/firmware"
-          cp -R components packages hermes-voice-pe.factory.yaml hermes-voice-pe.local.yaml secrets.yaml "$work/firmware/"
+          cp -R components models packages hermes-voice-pe.factory.yaml hermes-voice-pe.local.yaml secrets.yaml "$work/firmware/"
           sed -i 's/max_recording_duration: 30s/max_recording_duration: 31s/' "$work/firmware/packages/hermes-voice-pe-base.yaml"
           if esphome config "$work/firmware/hermes-voice-pe.factory.yaml" >"$work/config.log" 2>&1; then
             echo "A recording duration beyond the realtime/ring bound was accepted" >&2
