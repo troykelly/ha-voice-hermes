@@ -1229,6 +1229,19 @@ static void esp_websocket_client_task(void *pv)
                     break;
                 }
             }
+#else
+            else if (WS_HTTP_REDIRECT(result)) {
+                /*
+                 * ha-voice-hermes security boundary: configured headers include
+                 * a per-device bearer. Never follow a redirect or treat its HTTP
+                 * connection as an upgraded WebSocket.
+                 */
+                client->error_handle.esp_ws_handshake_status_code = result;
+                client->error_handle.error_type = WEBSOCKET_ERROR_TYPE_HANDSHAKE;
+                esp_websocket_client_error(client, "WebSocket redirect rejected with HTTP status %d", result);
+                esp_websocket_client_abort_connection(client, WEBSOCKET_ERROR_TYPE_HANDSHAKE);
+                break;
+            }
 #endif
             ESP_LOGD(TAG, "Transport connected to %s://%s:%d", client->config->scheme, client->config->host, client->config->port);
 
