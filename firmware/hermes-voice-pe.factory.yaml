@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Universal factory image: no Wi-Fi, API, OTA, gateway, Hermes, ElevenLabs or
+# other provider credentials are embedded. Provision with authorized Improv
+# BLE or Improv Serial, then adopt in ESPHome.
+packages:
+  hermes_voice_pe_base: !include packages/hermes-voice-pe-base.yaml
+
+# Keep factory and configured artifacts in separate caches. Switching API
+# encryption modes in one ESPHome build directory can leave stale objects.
+esphome:
+  build_path: build/hermes-voice-pe-factory
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [hermes_voice]

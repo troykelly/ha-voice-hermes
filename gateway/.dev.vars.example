@@ -1,0 +1,23 @@
+# Copy to .dev.vars for local development. Never commit real values.
+DEVICE_AUTH_TOKEN="REPLACE_ME"
+ELEVENLABS_API_KEY="REPLACE_ME"
+ELEVENLABS_VOICE_ID="REPLACE_ME"
+HERMES_BASE_URL="https://hermes.example.com"
+HERMES_API_KEY="REPLACE_ME"
+
+# Optional Worker-owned device → Hermes long-term-memory scope mapping.
+# Devices never supply this value. Omitted devices use voice:<device-id>.
+# HERMES_SESSION_KEYS_JSON='{"voice-pe-01":"agent:main:voice:room:kitchen"}'
+
+# Optional hard conversation rotation after inactivity; disabled by default.
+# CONVERSATION_IDLE_SECONDS="1800"
+
+# Optional Cloudflare Access service token protecting HERMES_BASE_URL.
+# CF_ACCESS_CLIENT_ID="service-token-id.access"
+# CF_ACCESS_CLIENT_SECRET="REPLACE_ME"
+
+# OpenAI-compatible STT fallback:
+# STT_PROVIDER="openai-compatible"
+# STT_BASE_URL="https://api.openai.com/v1"
+# STT_API_KEY="REPLACE_ME"
+# STT_MODEL="whisper-1"

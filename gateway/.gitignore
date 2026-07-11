@@ -1,0 +1,6 @@
+/build/
+/node_modules/
+/target/
+/.wrangler/
+.dev.vars
+.env

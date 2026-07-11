@@ -1,0 +1,14 @@
+{
+  "name": "ha-voice-hermes-gateway",
+  "private": true,
+  "scripts": {
+    "build": "worker-build --release",
+    "check": "cargo check",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "test": "cargo test"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

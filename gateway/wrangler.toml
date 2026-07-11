@@ -1,0 +1,26 @@
+name = "ha-voice-hermes-gateway"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-07-11"
+compatibility_flags = ["no_websocket_standard_binary_type"]
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "VOICE_SESSIONS"
+class_name = "VoiceSession"
+
+[[migrations]]
+tag = "realtime-v2"
+new_sqlite_classes = ["VoiceSession"]
+
+[build]
+command = "cargo install -q worker-build --version 0.8.4 --locked && worker-build --release"
+
+[vars]
+STT_PROVIDER = "elevenlabs"
+REALTIME_STT_MODEL = "scribe_v2_realtime"
+TTS_MODEL = "eleven_flash_v2_5"
+HERMES_MODEL = "hermes-agent"
+CONVERSATION_IDLE_SECONDS = "0"
+MAX_AUDIO_BYTES = "4194304"
+MAX_AUDIO_SECONDS = "120"
+MAX_HERMES_RESPONSE_BYTES = "2097152"

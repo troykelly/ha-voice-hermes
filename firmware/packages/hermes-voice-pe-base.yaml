@@ -1,0 +1,710 @@
+# SPDX-License-Identifier: MIT
+substitutions:
+  name: hermes-voice-pe
+  friendly_name: Hermes Voice PE
+  # Empty is the adoption-safe default. The firmware derives a stable identity
+  # from the ESP32 hardware MAC; an adopter may explicitly override it.
+  device_id: ""
+  # A universal factory/imported build must compile without private values.
+  # Add both gateway values plus an OTA password in the adopter-owned YAML.
+  hermes_gateway_url: ""
+  hermes_device_token: ""
+  # Dashboard Import cannot generate an OTA password. Empty is required for
+  # the factory-to-owner handoff; the adopter sets this on the enrollment OTA.
+  ota_password: ""
+  # Release builds must override this with their public, immutable tag.
+  dashboard_import_url: github://troykelly/ha-voice-hermes/firmware/hermes-voice-pe.yaml@v0.3.0
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: true
+  min_version: 2026.6.0
+  project:
+    name: local.ha-voice-hermes
+    version: "0.3.0"
+  on_boot:
+    priority: 375
+    then:
+      - lambda: id(i2s_audio_speaker).set_volume(0.50f);
+      - script.execute: control_leds
+      - delay: 1s
+      - switch.turn_on: internal_speaker_amp
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  cpu_frequency: 240MHz
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
+      CONFIG_SPIRAM_RODATA: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+      # Match the official Voice PE factory image: BLE provisioning uses PSRAM
+      # and dynamic allocation, then BLE is disabled before realtime audio.
+      CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST: "y"
+      CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY: "y"
+      CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
+      CONFIG_MBEDTLS_SSL_PROTO_TLS1_3: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+  ignore_not_found: false
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/esphome/home-assistant-voice-pe
+      ref: 0579e7b9d8504264719c593474c85447253c9dc1
+      path: esphome/components
+    components: [voice_kit]
+    refresh: 0s
+
+logger:
+  level: DEBUG
+  logs:
+    sensor: WARN
+
+wifi:
+  id: wifi_id
+  fast_connect: false
+  on_connect:
+    - script.execute: finish_wifi_connect
+  on_disconnect:
+    # Cancel a stale on-connect grace period before restoring BLE. Otherwise a
+    # short association could disable BLE five seconds after Wi-Fi was lost.
+    - script.stop: finish_wifi_connect
+    - hermes_voice.stop:
+        id: hermes
+    - micro_wake_word.stop:
+        id: mww
+    - lambda: id(hermes).suspend_transport();
+    - ble.enable:
+    - script.execute: control_leds
+
+improv_serial:
+
+esp32_ble:
+  name: hermes-vpe
+
+esp32_improv:
+  authorizer: center_button
+  on_start:
+    - lambda: id(improv_ble_in_progress) = true;
+    - light.turn_on:
+        id: voice_leds
+        brightness: 55%
+        effect: Provisioning
+  on_provisioning:
+    - lambda: id(improv_ble_in_progress) = true;
+    - light.turn_on:
+        id: voice_leds
+        brightness: 55%
+        effect: Provisioning
+  on_provisioned:
+    - lambda: id(improv_ble_in_progress) = false;
+    - script.execute: control_leds
+  on_stop:
+    - lambda: id(improv_ble_in_progress) = false;
+    - script.execute: control_leds
+
+ota:
+  - platform: esphome
+    id: ota_esphome
+    password: ${ota_password}
+
+safe_mode:
+
+# Home Assistant is an optional media/control plane. Disabling the default API
+# reboot watchdog keeps Hermes voice operational even when HA is unavailable.
+api:
+  id: api_id
+  reboot_timeout: 0s
+  # Home Assistant/Device Builder installs a unique key during onboarding.
+  encryption:
+
+dashboard_import:
+  package_import_url: ${dashboard_import_url}
+
+i2c:
+  - id: internal_i2c
+    sda: GPIO5
+    scl: GPIO6
+    frequency: 400kHz
+
+i2s_audio:
+  - id: i2s_output
+    i2s_lrclk_pin: GPIO7
+    i2s_bclk_pin: GPIO8
+  - id: i2s_input
+    i2s_lrclk_pin: GPIO14
+    i2s_bclk_pin: GPIO13
+
+microphone:
+  - platform: i2s_audio
+    id: i2s_mics
+    i2s_din_pin: GPIO15
+    adc_type: external
+    pdm: false
+    sample_rate: 16000
+    bits_per_sample: 32bit
+    i2s_mode: secondary
+    i2s_audio_id: i2s_input
+    channel: stereo
+
+speaker:
+  - platform: i2s_audio
+    id: i2s_audio_speaker
+    sample_rate: 48000
+    i2s_mode: secondary
+    i2s_dout_pin: GPIO10
+    bits_per_sample: 32bit
+    i2s_audio_id: i2s_output
+    dac_type: external
+    channel: stereo
+    timeout: never
+    buffer_duration: 100ms
+    audio_dac: aic3204_dac
+
+  # Hermes, HA announcements, and HA music have independent bounded mixer
+  # inputs. All three still traverse the hardware output that XMOS observes as
+  # its AEC reference.
+  - platform: mixer
+    id: mixing_speaker
+    output_speaker: i2s_audio_speaker
+    num_channels: 2
+    task_stack_in_psram: true
+    source_speakers:
+      - id: hermes_mixing_input
+        timeout: never
+      - id: ha_announcement_mixing_input
+        timeout: never
+      - id: ha_music_mixing_input
+        timeout: never
+
+  - platform: resampler
+    id: hermes_response_speaker
+    output_speaker: hermes_mixing_input
+    sample_rate: 48000
+    bits_per_sample: 16
+    task_stack_in_psram: true
+
+  - platform: resampler
+    id: ha_announcement_speaker
+    output_speaker: ha_announcement_mixing_input
+    sample_rate: 48000
+    bits_per_sample: 16
+    task_stack_in_psram: true
+
+  - platform: resampler
+    id: ha_music_speaker
+    output_speaker: ha_music_mixing_input
+    sample_rate: 48000
+    bits_per_sample: 16
+    task_stack_in_psram: true
+
+media_source:
+  - platform: audio_http
+    id: ha_http_announcement_source
+    buffer_size: 250000
+  - platform: audio_http
+    id: ha_http_music_source
+    buffer_size: 500000
+
+media_player:
+  - platform: speaker_source
+    id: ha_media_player
+    name: Media Player
+    announcement_pipeline:
+      # HA transcodes announcement URLs to this low-cost mono stream.
+      format: FLAC
+      num_channels: 1
+      sample_rate: 48000
+      speaker: ha_announcement_speaker
+      sources:
+        - ha_http_announcement_source
+    media_pipeline:
+      # Music remains stereo and never shares Hermes' receive/backpressure path.
+      format: FLAC
+      num_channels: 2
+      sample_rate: 48000
+      speaker: ha_music_speaker
+      sources:
+        - ha_http_music_source
+    volume_increment: 0.05
+    volume_min: 0.4
+    volume_max: 0.85
+    on_announcement:
+      - script.execute: sync_audio_ducking
+    on_state:
+      - script.execute: sync_audio_ducking
+
+audio_dac:
+  - platform: aic3204
+    id: aic3204_dac
+    i2c_id: internal_i2c
+
+voice_kit:
+  id: voice_kit_component
+  i2c_id: internal_i2c
+  reset_pin: GPIO4
+  # Channel 0 is the full XMOS AEC → IC → NS → AGC chain used for
+  # full-duplex voice. Keep the wake-word channel at the lower-latency NS stage.
+  channel_0_stage: AGC
+  channel_1_stage: NS
+  firmware:
+    url: https://github.com/esphome/voice-kit-xmos-firmware/releases/download/v1.3.1/ffva_v1.3.1_upgrade.bin
+    version: "1.3.1"
+    md5: 964635c5bf125529dab14a2472a15401
+
+micro_wake_word:
+  id: mww
+  microphone:
+    microphone: i2s_mics
+    channels: 1
+    gain_factor: 4
+  stop_after_detection: true
+  models:
+    - model: https://github.com/kahrendt/microWakeWord/releases/download/okay_nabu_20241226.3/okay_nabu.json
+      id: okay_nabu
+  vad:
+  on_wake_word_detected:
+    - if:
+        condition:
+          and:
+            - wifi.connected:
+            - binary_sensor.is_off: hardware_mute_switch
+            - lambda: return id(hermes).is_ready();
+        then:
+          # While idle this starts a turn. While Hermes is thinking/replying,
+          # the same action cancels that response and starts a fresh turn.
+          - hermes_voice.start:
+              id: hermes
+          - script.execute: sync_audio_ducking
+
+hermes_voice:
+  id: hermes
+  gateway_url: "${hermes_gateway_url}"
+  auth_token: "${hermes_device_token}"
+  device_id: "${device_id}"
+  microphone:
+    microphone: i2s_mics
+    channels: 0
+    gain_factor: 1
+  speaker: hermes_response_speaker
+  micro_wake_word: mww
+  silence_threshold: 250
+  # Audio is already in flight while speaking; this is only the local commit
+  # hangover, not an upload delay.
+  silence_duration: 500ms
+  speech_timeout: 8s
+  min_recording_duration: 300ms
+  max_recording_duration: 30s
+  request_timeout: 5min
+  output_sample_rate: 16000
+  task_stack_in_psram: false
+  on_listening:
+    - lambda: id(voice_phase) = 1;
+    - script.execute: sync_audio_ducking
+    - script.execute: control_leds
+  on_speech_start:
+    - lambda: id(voice_phase) = 2;
+    - script.execute: control_leds
+  on_thinking:
+    - lambda: id(voice_phase) = 3;
+    - script.execute: sync_audio_ducking
+    - script.execute: control_leds
+  on_replying:
+    - lambda: id(voice_phase) = 4;
+    - script.execute: sync_audio_ducking
+    - script.execute: control_leds
+  on_error:
+    - lambda: id(voice_phase) = 5;
+    - script.execute: sync_audio_ducking
+    - script.execute: control_leds
+  on_idle:
+    - lambda: id(voice_phase) = 0;
+    - script.execute: sync_audio_ducking
+    - script.execute: restart_wake_word
+    - script.execute: control_leds
+
+globals:
+  - id: voice_phase
+    type: uint8_t
+    restore_value: false
+    initial_value: "0"
+  - id: improv_ble_in_progress
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+switch:
+  - platform: gpio
+    id: internal_speaker_amp
+    pin: GPIO47
+    restore_mode: ALWAYS_OFF
+    internal: true
+
+binary_sensor:
+  - platform: gpio
+    id: center_button
+    internal: true
+    pin:
+      number: GPIO0
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_multi_click:
+      - timing:
+          - ON for at most 1s
+          - OFF for at least 250ms
+        then:
+          - if:
+              condition:
+                hermes_voice.is_running:
+                  id: hermes
+              then:
+                - hermes_voice.stop:
+                    id: hermes
+              else:
+                - if:
+                    condition:
+                      and:
+                        - wifi.connected:
+                        - binary_sensor.is_off: hardware_mute_switch
+                        - lambda: return id(hermes).is_ready();
+                    then:
+                      - hermes_voice.start:
+                          id: hermes
+                      - script.execute: sync_audio_ducking
+      # A deliberate hold creates a boundary without delaying or ambiguating
+      # the latency-sensitive short-press start/cancel gesture.
+      - timing:
+          - ON for 2s to 5s
+          - OFF for at least 250ms
+        then:
+          - hermes_voice.new_conversation:
+              id: hermes
+      - timing:
+          - ON for at least 10s
+        then:
+          - button.press: factory_reset_button
+
+  - platform: gpio
+    id: hardware_mute_switch
+    internal: true
+    pin: GPIO3
+    on_press:
+      - hermes_voice.stop:
+          id: hermes
+      - micro_wake_word.stop:
+          id: mww
+      - microphone.mute: i2s_mics
+      - script.execute: control_leds
+    on_release:
+      - microphone.unmute: i2s_mics
+      - delay: 250ms
+      - script.execute: restart_wake_word
+      - script.execute: control_leds
+
+  - platform: template
+    id: hermes_configured_sensor
+    name: Hermes Configured
+    entity_category: diagnostic
+    lambda: return id(hermes).is_configured();
+
+sensor:
+  - platform: rotary_encoder
+    id: dial
+    internal: true
+    pin_a: GPIO16
+    pin_b: GPIO18
+    resolution: 2
+    on_clockwise:
+      - lambda: |-
+          id(i2s_audio_speaker).set_volume(
+            std::min(0.85f, id(i2s_audio_speaker).get_volume() + 0.05f));
+    on_anticlockwise:
+      - lambda: |-
+          id(i2s_audio_speaker).set_volume(
+            std::max(0.40f, id(i2s_audio_speaker).get_volume() - 0.05f));
+
+text_sensor:
+  - platform: template
+    id: hermes_device_id_sensor
+    name: Hermes Device ID
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: return {id(hermes).get_device_id()};
+
+power_supply:
+  - id: led_power
+    pin: GPIO45
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: voice_leds
+    internal: true
+    pin: GPIO21
+    chipset: WS2812
+    rgb_order: GRB
+    num_leds: 12
+    max_refresh_rate: 15ms
+    rmt_symbols: 192
+    default_transition_length: 0ms
+    power_supply: led_power
+    effects:
+      - addressable_lambda:
+          name: Listening
+          update_interval: 60ms
+          lambda: |-
+            static uint8_t index = 0;
+            if (initial_run) index = 0;
+            it.all() = Color::BLACK;
+            it[index % 12] = Color(0, 110, 255);
+            it[(index + 11) % 12] = Color(0, 35, 100);
+            index = (index + 1) % 12;
+      - addressable_lambda:
+          name: Speech
+          update_interval: 80ms
+          lambda: |-
+            static bool bright = false;
+            bright = !bright;
+            it.all() = bright ? Color(0, 160, 90) : Color(0, 55, 30);
+      - addressable_lambda:
+          name: Thinking
+          update_interval: 45ms
+          lambda: |-
+            static uint8_t level = 20;
+            static int8_t direction = 5;
+            level += direction;
+            if (level >= 150 || level <= 20) direction = -direction;
+            it.all() = Color(level, 0, level);
+      - addressable_lambda:
+          name: Replying
+          update_interval: 50ms
+          lambda: |-
+            static uint8_t index = 0;
+            if (initial_run) index = 0;
+            it.all() = Color::BLACK;
+            it[index % 12] = Color(0, 190, 210);
+            it[(index + 1) % 12] = Color(0, 55, 70);
+            index = (index + 11) % 12;
+      - addressable_lambda:
+          name: Error
+          update_interval: 250ms
+          lambda: |-
+            static bool on = false;
+            on = !on;
+            it.all() = on ? Color(255, 0, 0) : Color::BLACK;
+      - addressable_lambda:
+          name: Offline
+          update_interval: 500ms
+          lambda: |-
+            static bool on = false;
+            on = !on;
+            it.all() = on ? Color(120, 35, 0) : Color::BLACK;
+      - addressable_lambda:
+          name: Provisioning
+          update_interval: 180ms
+          lambda: |-
+            static bool on = false;
+            on = !on;
+            it.all() = on ? Color(0, 90, 180) : Color(0, 12, 24);
+
+script:
+  # Improv must return its success response before BLE is stopped. This script
+  # is explicitly cancelled on disconnect, then rechecks Wi-Fi before it can
+  # disable BLE. The gateway socket is permitted only after BLE has stopped.
+  - id: finish_wifi_connect
+    mode: restart
+    then:
+      - delay: 5s
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - ble.disable:
+            - wait_until:
+                condition:
+                  not:
+                    ble.enabled:
+            - lambda: id(hermes).resume_transport();
+            - script.execute: restart_wake_word
+            - script.execute: control_leds
+
+  # Hermes owns conversational priority. HA audio is attenuated throughout a
+  # turn, then restored without accidentally unducking music beneath an active
+  # HA announcement.
+  - id: sync_audio_ducking
+    mode: restart
+    then:
+      - if:
+          condition:
+            hermes_voice.is_running:
+              id: hermes
+          then:
+            - mixer_speaker.apply_ducking:
+                id: ha_announcement_mixing_input
+                decibel_reduction: 20
+                duration: 0ms
+            - mixer_speaker.apply_ducking:
+                id: ha_music_mixing_input
+                decibel_reduction: 20
+                duration: 0ms
+          else:
+            - mixer_speaker.apply_ducking:
+                id: ha_announcement_mixing_input
+                decibel_reduction: 0
+                duration: 250ms
+            - if:
+                condition:
+                  media_player.is_announcing:
+                    id: ha_media_player
+                then:
+                  - mixer_speaker.apply_ducking:
+                      id: ha_music_mixing_input
+                      decibel_reduction: 20
+                      duration: 0ms
+                else:
+                  - mixer_speaker.apply_ducking:
+                      id: ha_music_mixing_input
+                      decibel_reduction: 0
+                      duration: 1s
+
+  # Starting mWW while it is still STOPPING is lossy in ESPHome. Queue every
+  # restart through this script, wait for STOPPED, then re-check the world.
+  - id: restart_wake_word
+    mode: restart
+    then:
+      - wait_until:
+          condition:
+            not:
+              micro_wake_word.is_running:
+                id: mww
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - binary_sensor.is_off: hardware_mute_switch
+              - lambda: return id(hermes).is_ready();
+              - not:
+                  ble.enabled:
+              - not:
+                  hermes_voice.is_running:
+                    id: hermes
+              - not:
+                  micro_wake_word.is_running:
+                    id: mww
+          then:
+            - micro_wake_word.start:
+                id: mww
+
+  - id: control_leds
+    mode: restart
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: hardware_mute_switch
+          then:
+            - light.turn_on:
+                id: voice_leds
+                brightness: 35%
+                red: 100%
+                green: 0%
+                blue: 0%
+                effect: none
+          else:
+            - if:
+                condition:
+                  not: wifi.connected
+                then:
+                  - light.turn_on:
+                      id: voice_leds
+                      brightness: 35%
+                      effect: Offline
+                else:
+                  - if:
+                      condition:
+                        lambda: return id(voice_phase) == 1;
+                      then:
+                        - light.turn_on:
+                            id: voice_leds
+                            brightness: 70%
+                            effect: Listening
+                      else:
+                        - if:
+                            condition:
+                              lambda: return id(voice_phase) == 2;
+                            then:
+                              - light.turn_on:
+                                  id: voice_leds
+                                  brightness: 70%
+                                  effect: Speech
+                            else:
+                              - if:
+                                  condition:
+                                    lambda: return id(voice_phase) == 3;
+                                  then:
+                                    - light.turn_on:
+                                        id: voice_leds
+                                        brightness: 65%
+                                        effect: Thinking
+                                  else:
+                                    - if:
+                                        condition:
+                                          lambda: return id(voice_phase) == 4;
+                                        then:
+                                          - light.turn_on:
+                                              id: voice_leds
+                                              brightness: 70%
+                                              effect: Replying
+                                        else:
+                                          - if:
+                                              condition:
+                                                lambda: return id(voice_phase) == 5;
+                                              then:
+                                                - light.turn_on:
+                                                    id: voice_leds
+                                                    brightness: 75%
+                                                    effect: Error
+                                              else:
+                                                - if:
+                                                    condition:
+                                                      lambda: return id(hermes).is_configured();
+                                                    then:
+                                                      - light.turn_on:
+                                                          id: voice_leds
+                                                          brightness: 18%
+                                                          red: 5%
+                                                          green: 55%
+                                                          blue: 100%
+                                                          effect: none
+                                                    else:
+                                                      - light.turn_on:
+                                                          id: voice_leds
+                                                          brightness: 22%
+                                                          red: 100%
+                                                          green: 45%
+                                                          blue: 0%
+                                                          effect: none
+
+button:
+  - platform: template
+    id: new_hermes_conversation_button
+    name: New Hermes Conversation
+    icon: mdi:message-plus-outline
+    on_press:
+      - hermes_voice.new_conversation:
+          id: hermes
+
+  - platform: factory_reset
+    id: factory_reset_button
+    internal: true

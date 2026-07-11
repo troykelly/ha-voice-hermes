@@ -1,0 +1,46 @@
+# Operating-system and editor metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs and local tooling state
+*.log
+.direnv/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+**/__pycache__/
+*.py[cod]
+
+# Credentials and private configuration
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!**/.dev.vars.example
+**/secrets.yaml
+**/secrets.local.yaml
+!**/secrets.example.yaml
+*.key
+*.pem
+*.p12
+*.pfx
+*.kdbx
+*_ed25519
+*_rsa
+*_ecdsa
+*_dsa
+
+# Generated firmware and gateway artifacts
+firmware/.esphome/
+firmware/build/
+gateway/.wrangler/
+gateway/build/
+gateway/node_modules/
+gateway/target/

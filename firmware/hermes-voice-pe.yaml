@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Public, zero-secret Dashboard Import package. Do not distribute a factory
+# image until the immutable ref below has passed the release acceptance tests.
+substitutions:
+  hermes_component_repository: https://github.com/troykelly/ha-voice-hermes
+  hermes_component_ref: v0.3.0
+
+packages:
+  hermes_voice_pe_base: !include packages/hermes-voice-pe-base.yaml
+
+external_components:
+  - source:
+      type: git
+      url: ${hermes_component_repository}
+      ref: ${hermes_component_ref}
+      path: firmware/components
+    components: [hermes_voice]
+    refresh: 0s
