@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -8,6 +8,7 @@ use futures_channel::mpsc::{channel, Receiver, Sender};
 use futures_util::{future, pin_mut, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use wasm_bindgen::{JsCast, JsValue};
 use worker::{
     durable_object, AbortController, Delay, DurableObject, Env, Error, Fetch, Headers, Method,
@@ -31,6 +32,7 @@ use crate::text::{StreamingTtsSanitizer, MAX_TTS_CHARS};
 const DEVICE_PROTOCOL: &str = "hermes-voice.realtime.v2";
 const DEVICE_ROUTE: &str = "/v2/realtime";
 const INTERNAL_DEVICE_HEADER: &str = "X-Authenticated-Device-Id";
+const INTERNAL_AUTH_FINGERPRINT_HEADER: &str = "X-Authenticated-Device-Credential";
 const DEVICE_AUDIO_CHUNK_BYTES: usize = 2_048;
 const MAX_PROVIDER_AUDIO_BYTES: usize = 128 * 1024;
 const MAX_DEVICE_BUFFERED_BYTES: u32 = 256 * 1024;
@@ -51,22 +53,58 @@ const DEADLINE_POLL_SECONDS: u64 = 1;
 const MAX_STT_EVENT_BYTES: usize = 128 * 1024;
 const MAX_TTS_EVENT_BYTES: usize = 256 * 1024;
 const MAX_TRANSCRIPT_CHARS: usize = 16_000;
+const MAX_TRANSCRIPT_BYTES: usize = 16 * 1024;
+const MAX_HERMES_ERROR_BYTES: usize = 16 * 1024;
 const MAX_HERMES_SSE_EVENT_BYTES: usize = 128 * 1024;
 const MAX_HERMES_DISCARDED_EVENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_HERMES_STREAM_BYTES: usize = 8 * 1024 * 1024;
-const VOICE_INSTRUCTIONS: &str = "Give a concise, natural spoken answer suitable for text-to-speech. Do not use Markdown, code blocks, tables, or raw URLs unless the user explicitly requests them. Put natural sentence punctuation early enough that speech can begin before the whole answer is complete.";
+const USAGE_WINDOW_MS: u64 = 24 * 60 * 60 * 1_000;
+const USAGE_MESSAGE_FLUSH_INTERVAL: u32 = 64;
+const USAGE_AUDIO_FLUSH_BYTES: u64 = (DEVICE_AUDIO_CHUNK_BYTES * 4) as u64;
 
 const STORAGE_LAST_SEEN_TURN: &str = "last_seen_turn_id";
 // Read only during migration from pre-conversation-lifecycle deployments.
 const STORAGE_LAST_COMPLETED_RESPONSE: &str = "last_completed_response_id";
 const STORAGE_CONVERSATION_STATE: &str = "conversation_state";
 const STORAGE_TURN_JOURNAL: &str = "turn_journal";
+const STORAGE_USAGE_BUDGET: &str = "usage_budget";
 const CONVERSATION_STATE_VERSION: u8 = 1;
+const USAGE_BUDGET_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct DeviceAttachment {
     device_id: String,
     hello_received: bool,
+    /// SHA-256 of the credential accepted at the edge. It is not usable as a
+    /// bearer, and lets a hibernating object revoke a socket after rotation.
+    #[serde(default)]
+    auth_fingerprint: String,
+    #[serde(default)]
+    message_count: u32,
+    #[serde(default)]
+    turn_attempt_count: u32,
+    #[serde(default)]
+    audio_bytes: u64,
+    #[serde(default)]
+    unpersisted_message_count: u32,
+    #[serde(default)]
+    unpersisted_audio_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct UsageBudget {
+    version: u8,
+    window_started_unix_ms: u64,
+    message_count: u64,
+    turn_attempt_count: u64,
+    audio_bytes: u64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct UsageDelta {
+    message_count: u64,
+    turn_attempt_count: u64,
+    audio_bytes: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -76,6 +114,8 @@ struct TurnJournal {
     conversation_id: Option<String>,
     prior_response_id: Option<String>,
     inflight_response_id: Option<String>,
+    #[serde(default)]
+    idempotency_key: Option<String>,
     state: String,
 }
 
@@ -93,17 +133,49 @@ struct ConversationState {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct ConversationBinding {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    fingerprint: String,
+    // Legacy raw fields are accepted only long enough to rotate a pre-v0.3
+    // chain. New writes contain only a one-way, non-bearer fingerprint.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     hermes_base_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     hermes_model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     hermes_session_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    hermes_profile_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    binding_revision: String,
 }
 
 impl ConversationBinding {
     fn from_config(config: &Config, device_id: &str) -> Self {
+        let hermes_session_key = config.hermes_session_key(device_id);
+        let fields = [
+            config.hermes_base_url.as_str(),
+            config.hermes_model.as_str(),
+            hermes_session_key.as_str(),
+            config.hermes_profile_id.as_str(),
+            config.hermes_binding_revision.as_str(),
+        ];
+        let mut hasher = Sha256::new();
+        for field in fields {
+            hasher.update((field.len() as u64).to_be_bytes());
+            hasher.update(field.as_bytes());
+        }
+        let mut fingerprint = String::with_capacity(64);
+        for byte in hasher.finalize() {
+            use std::fmt::Write as _;
+            let _ = write!(fingerprint, "{byte:02x}");
+        }
         Self {
-            hermes_base_url: config.hermes_base_url.clone(),
-            hermes_model: config.hermes_model.clone(),
-            hermes_session_key: config.hermes_session_key(device_id),
+            fingerprint,
+            hermes_base_url: String::new(),
+            hermes_model: String::new(),
+            hermes_session_key: String::new(),
+            hermes_profile_id: String::new(),
+            binding_revision: String::new(),
         }
     }
 }
@@ -143,6 +215,7 @@ enum StartStorage {
 enum ReconcileOutcome {
     Current,
     Stale,
+    Ambiguous,
 }
 
 struct ActiveTurn {
@@ -156,9 +229,11 @@ struct ActiveTurn {
     input_samples: u32,
     max_input_samples: u32,
     last_input_ack: Option<u32>,
+    short_input_frame_seen: bool,
     stt_pending: Vec<u8>,
     next_output_seq: u32,
     output_samples: u32,
+    max_output_samples: u32,
     last_output_ack: Option<u32>,
     output_ack_tx: Option<Sender<u32>>,
     stt: Option<WebSocket>,
@@ -171,6 +246,44 @@ struct ActiveTurn {
     started_at_ms: f64,
     turn_deadline_ms: f64,
     phase_deadline_ms: f64,
+}
+
+/// Reframes arbitrarily-bounded provider PCM events into the fixed device
+/// transport frames. Only `finish` may return a short frame, so a provider
+/// event boundary can never masquerade as the end of device audio.
+#[derive(Default)]
+struct PlaybackReframer {
+    pending: Vec<u8>,
+}
+
+impl PlaybackReframer {
+    fn push(&mut self, mut audio: &[u8]) -> Vec<Vec<u8>> {
+        let mut frames = Vec::new();
+
+        if !self.pending.is_empty() {
+            let needed = DEVICE_AUDIO_CHUNK_BYTES - self.pending.len();
+            let copied = needed.min(audio.len());
+            self.pending.extend_from_slice(&audio[..copied]);
+            audio = &audio[copied..];
+            if self.pending.len() == DEVICE_AUDIO_CHUNK_BYTES {
+                frames.push(std::mem::take(&mut self.pending));
+            }
+        }
+
+        while audio.len() >= DEVICE_AUDIO_CHUNK_BYTES {
+            frames.push(audio[..DEVICE_AUDIO_CHUNK_BYTES].to_vec());
+            audio = &audio[DEVICE_AUDIO_CHUNK_BYTES..];
+        }
+        self.pending.extend_from_slice(audio);
+        frames
+    }
+
+    fn finish(&mut self) -> std::result::Result<Option<Vec<u8>>, &'static str> {
+        if self.pending.len() & 1 != 0 {
+            return Err("TTS ended with an incomplete PCM sample");
+        }
+        Ok((!self.pending.is_empty()).then(|| std::mem::take(&mut self.pending)))
+    }
 }
 
 #[derive(Default)]
@@ -193,19 +306,27 @@ pub async fn upgrade(request: Request, env: &Env) -> ApiResult<Response> {
         .ok_or_else(|| ApiError::bad_request("invalid_device_id", "Device ID is invalid"))?;
     let token = bearer_token(&request).ok_or_else(ApiError::unauthorized)?;
     let config = Config::from_env(env)?;
-    if !config.authenticate(&device_id, &token) {
-        return Err(ApiError::unauthorized());
-    }
+    let auth_fingerprint = config
+        .authenticate_fingerprint(&device_id, &token)
+        .ok_or_else(ApiError::unauthorized)?;
+    drop(token);
 
     // Runtime-owned incoming Request headers are immutable in workers-rs.
     // clone_mut preserves the WebSocket upgrade metadata while giving the
     // edge handler a private request on which to attach the authenticated
     // identity passed to the Durable Object.
     let mut forwarded = request.clone_mut().map_err(|_| ApiError::internal())?;
-    forwarded
-        .headers_mut()
-        .map_err(|_| ApiError::internal())?
+    let forwarded_headers = forwarded.headers_mut().map_err(|_| ApiError::internal())?;
+    // The Durable Object needs only a non-bearer credential epoch after edge
+    // authentication. Do not carry the raw device token into its request.
+    forwarded_headers
+        .delete("Authorization")
+        .map_err(|_| ApiError::internal())?;
+    forwarded_headers
         .set(INTERNAL_DEVICE_HEADER, &device_id)
+        .map_err(|_| ApiError::internal())?;
+    forwarded_headers
+        .set(INTERNAL_AUTH_FINGERPRINT_HEADER, &auth_fingerprint)
         .map_err(|_| ApiError::internal())?;
     let namespace = env
         .durable_object("VOICE_SESSIONS")
@@ -214,9 +335,19 @@ pub async fn upgrade(request: Request, env: &Env) -> ApiResult<Response> {
         .id_from_name(&device_id)
         .and_then(|id| id.get_stub())
         .map_err(|_| ApiError::internal())?;
-    stub.fetch_with_request(forwarded)
+    let response = stub
+        .fetch_with_request(forwarded)
         .await
-        .map_err(|_| ApiError::internal())
+        .map_err(|_| ApiError::internal())?;
+    match response.status_code() {
+        101 => Ok(response),
+        429 => Err(ApiError::new(
+            429,
+            "quota_exhausted",
+            "Device usage quota exhausted",
+        )),
+        _ => Err(ApiError::internal()),
+    }
 }
 
 fn require_websocket_upgrade(request: &Request) -> ApiResult<()> {
@@ -262,6 +393,121 @@ fn bearer_token(request: &Request) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn valid_auth_fingerprint(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn fresh_usage_budget(now_unix_ms: u64) -> UsageBudget {
+    UsageBudget {
+        version: USAGE_BUDGET_VERSION,
+        window_started_unix_ms: now_unix_ms,
+        message_count: 0,
+        turn_attempt_count: 0,
+        audio_bytes: 0,
+    }
+}
+
+fn usage_limits(config: &Config) -> (u64, u64, u64) {
+    (
+        u64::from(config.max_messages_per_connection),
+        u64::from(config.max_turns_per_connection),
+        u64::from(config.max_connection_audio_seconds)
+            .saturating_mul(u64::from(AUDIO_SAMPLE_RATE))
+            .saturating_mul(2),
+    )
+}
+
+fn usage_budget_exhausted(budget: &UsageBudget, config: &Config) -> bool {
+    usage_budget_reached_limits(budget, usage_limits(config))
+}
+
+fn usage_budget_reached_limits(budget: &UsageBudget, limits: (u64, u64, u64)) -> bool {
+    let (maximum_messages, maximum_turns, maximum_audio_bytes) = limits;
+    budget.message_count >= maximum_messages
+        || budget.turn_attempt_count >= maximum_turns
+        || budget.audio_bytes >= maximum_audio_bytes
+}
+
+fn usage_budget_for_time(existing: UsageBudget, now_unix_ms: u64) -> Result<UsageBudget> {
+    if existing.version != USAGE_BUDGET_VERSION || existing.window_started_unix_ms == 0 {
+        return Err(Error::RustError("invalid durable usage budget".into()));
+    }
+    if now_unix_ms >= existing.window_started_unix_ms
+        && now_unix_ms - existing.window_started_unix_ms >= USAGE_WINDOW_MS
+    {
+        Ok(fresh_usage_budget(now_unix_ms))
+    } else {
+        // A wall-clock rollback must never create a free abuse window.
+        Ok(existing)
+    }
+}
+
+async fn initialize_usage_budget(storage: &Storage) -> Result<()> {
+    let now = unix_now_ms().max(1.0) as u64;
+    match storage.get::<UsageBudget>(STORAGE_USAGE_BUDGET).await? {
+        Some(existing) => {
+            let current = usage_budget_for_time(existing.clone(), now)?;
+            if current != existing {
+                storage.put(STORAGE_USAGE_BUDGET, current).await?;
+            }
+        }
+        None => {
+            storage
+                .put(STORAGE_USAGE_BUDGET, fresh_usage_budget(now))
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn durable_usage_budget_exhausted(storage: &Storage, config: &Config) -> Result<bool> {
+    let now = unix_now_ms().max(1.0) as u64;
+    let existing = storage
+        .get::<UsageBudget>(STORAGE_USAGE_BUDGET)
+        .await?
+        .ok_or_else(|| Error::RustError("missing durable usage budget".into()))?;
+    let current = usage_budget_for_time(existing.clone(), now)?;
+    if current != existing {
+        storage.put(STORAGE_USAGE_BUDGET, current.clone()).await?;
+    }
+    Ok(usage_budget_exhausted(&current, config))
+}
+
+async fn charge_usage_budget(
+    storage: &Storage,
+    config: &Config,
+    delta: UsageDelta,
+) -> Result<bool> {
+    if delta.message_count == 0 && delta.turn_attempt_count == 0 && delta.audio_bytes == 0 {
+        return Ok(false);
+    }
+    let now = unix_now_ms().max(1.0) as u64;
+    let (maximum_messages, maximum_turns, maximum_audio_bytes) = usage_limits(config);
+    let exceeded = Rc::new(Cell::new(false));
+    let transaction_exceeded = exceeded.clone();
+    storage
+        .transaction(move |transaction| async move {
+            let existing: UsageBudget = transaction.get(STORAGE_USAGE_BUDGET).await?;
+            let mut usage = usage_budget_for_time(existing, now)?;
+            usage.message_count = usage.message_count.saturating_add(delta.message_count);
+            usage.turn_attempt_count = usage
+                .turn_attempt_count
+                .saturating_add(delta.turn_attempt_count);
+            usage.audio_bytes = usage.audio_bytes.saturating_add(delta.audio_bytes);
+            transaction_exceeded.set(
+                usage.message_count > maximum_messages
+                    || usage.turn_attempt_count > maximum_turns
+                    || usage.audio_bytes > maximum_audio_bytes,
+            );
+            transaction.put(STORAGE_USAGE_BUDGET, usage).await
+        })
+        .await?;
+    Ok(exceeded.get())
+}
+
 #[durable_object]
 pub struct VoiceSession {
     state: State,
@@ -290,10 +536,35 @@ impl DurableObject for VoiceSession {
             .get(INTERNAL_DEVICE_HEADER)?
             .filter(|value| valid_device_id(value))
             .ok_or_else(|| Error::RustError("missing authenticated device identity".into()))?;
+        let auth_fingerprint = request
+            .headers()
+            .get(INTERNAL_AUTH_FINGERPRINT_HEADER)?
+            .filter(|value| valid_auth_fingerprint(value))
+            .ok_or_else(|| Error::RustError("missing authenticated credential epoch".into()))?;
+
+        let config = Config::from_env(&self.env)
+            .map_err(|_| Error::RustError("gateway configuration unavailable".into()))?;
+        initialize_usage_budget(&self.storage).await?;
 
         cancel_active_turn(&self.runtime, "connection_replaced", false);
+        let mut durable_quota_exceeded = false;
         for existing in self.state.get_websockets() {
+            // Flush the old hibernating attachment before replacement. Close
+            // callbacks normally do this too, but accounting here prevents a
+            // rapid reconnect loop from depending on callback delivery to
+            // persist its final small message/audio batch.
+            if let Ok(Some(mut attachment)) = existing.deserialize_attachment::<DeviceAttachment>()
+            {
+                durable_quota_exceeded |= self
+                    .flush_attachment_usage(&config, &mut attachment, false)
+                    .await?;
+                existing.serialize_attachment(&attachment)?;
+            }
             let _ = existing.close(Some(4001), Some("connection replaced"));
+        }
+        durable_quota_exceeded |= durable_usage_budget_exhausted(&self.storage, &config).await?;
+        if durable_quota_exceeded {
+            return Response::error("Device usage quota exceeded", 429);
         }
 
         let pair = WebSocketPair::new()?;
@@ -303,6 +574,12 @@ impl DurableObject for VoiceSession {
         pair.server.serialize_attachment(&DeviceAttachment {
             device_id: device_id.clone(),
             hello_received: false,
+            auth_fingerprint,
+            message_count: 0,
+            turn_attempt_count: 0,
+            audio_bytes: 0,
+            unpersisted_message_count: 0,
+            unpersisted_audio_bytes: 0,
         })?;
         self.state.accept_web_socket(&pair.server);
         {
@@ -325,7 +602,7 @@ impl DurableObject for VoiceSession {
         socket: WebSocket,
         message: WebSocketIncomingMessage,
     ) -> Result<()> {
-        let attachment: DeviceAttachment = socket
+        let mut attachment: DeviceAttachment = socket
             .deserialize_attachment()?
             .ok_or_else(|| Error::RustError("missing websocket attachment".into()))?;
         {
@@ -344,12 +621,47 @@ impl DurableObject for VoiceSession {
             runtime.device = Some(socket.clone());
         }
 
+        let config = match Config::from_env(&self.env) {
+            Ok(config) => config,
+            Err(_) => {
+                send_error(&self.runtime, None, "configuration_error", true);
+                let _ = socket.close(Some(1011), Some("gateway configuration changed"));
+                return Ok(());
+            }
+        };
+        if config
+            .expected_token_fingerprint(&attachment.device_id)
+            .as_deref()
+            != Some(attachment.auth_fingerprint.as_str())
+        {
+            cancel_active_turn(&self.runtime, "authentication_failed", false);
+            send_error(&self.runtime, None, "authentication_failed", true);
+            let _ = socket.close(Some(4003), Some("credential revoked"));
+            return Ok(());
+        }
+        attachment.message_count = attachment.message_count.saturating_add(1);
+        attachment.unpersisted_message_count =
+            attachment.unpersisted_message_count.saturating_add(1);
+        if attachment.message_count > config.max_messages_per_connection {
+            cancel_active_turn(&self.runtime, "connection_quota_exceeded", false);
+            send_error(&self.runtime, None, "queue_overflow", true);
+            let _ = socket.close(Some(4008), Some("connection message quota exceeded"));
+            return Ok(());
+        }
+        // Keep unflushed durable-budget deltas in the hibernating attachment.
+        // Malformed frames and abrupt closes therefore cannot normally avoid
+        // accounting; small batches keep storage writes off the 64 ms audio
+        // hot path.
+        socket.serialize_attachment(&attachment)?;
+
         match message {
             WebSocketIncomingMessage::String(text) => {
                 let control = match decode_control_message(&text, MAX_CONTROL_MESSAGE_BYTES) {
                     Ok(control) => control,
                     Err(_) => {
-                        send_error(&self.runtime, None, "invalid_control", false);
+                        cancel_active_turn(&self.runtime, "protocol_error", false);
+                        send_error(&self.runtime, None, "protocol_error", true);
+                        let _ = socket.close(Some(1002), Some("invalid control"));
                         return Ok(());
                     }
                 };
@@ -357,12 +669,14 @@ impl DurableObject for VoiceSession {
                     .validate_direction(ControlDirection::DeviceToGateway)
                     .is_err()
                 {
+                    cancel_active_turn(&self.runtime, "protocol_error", false);
                     send_error(
                         &self.runtime,
                         control.turn_id().map(TurnId::get),
-                        "invalid_direction",
-                        false,
+                        "protocol_error",
+                        true,
                     );
+                    let _ = socket.close(Some(1002), Some("invalid control direction"));
                     return Ok(());
                 }
                 let is_hello = matches!(control, ControlMessage::Hello { .. });
@@ -371,6 +685,57 @@ impl DurableObject for VoiceSession {
                     let _ = socket.close(Some(1002), Some("hello required"));
                     return Ok(());
                 }
+                let turn_attempt = matches!(&control, ControlMessage::TurnStart { .. });
+                if turn_attempt {
+                    attachment.turn_attempt_count = attachment.turn_attempt_count.saturating_add(1);
+                    if attachment.turn_attempt_count > config.max_turns_per_connection {
+                        cancel_active_turn(&self.runtime, "connection_quota_exceeded", false);
+                        send_error(
+                            &self.runtime,
+                            control.turn_id().map(TurnId::get),
+                            "queue_overflow",
+                            true,
+                        );
+                        let _ = socket.close(Some(4008), Some("connection turn quota exceeded"));
+                        return Ok(());
+                    }
+                }
+                let flush_for_boundary = matches!(
+                    &control,
+                    ControlMessage::ConversationReset { .. }
+                        | ControlMessage::TurnStart { .. }
+                        | ControlMessage::TurnCommit { .. }
+                        | ControlMessage::TurnCancel { .. }
+                        | ControlMessage::Ping { .. }
+                );
+                if flush_for_boundary
+                    || attachment.unpersisted_message_count >= USAGE_MESSAGE_FLUSH_INTERVAL
+                {
+                    let exceeded = match self
+                        .flush_attachment_usage(&config, &mut attachment, turn_attempt)
+                        .await
+                    {
+                        Ok(exceeded) => exceeded,
+                        Err(_) => {
+                            send_error(&self.runtime, None, "internal_error", true);
+                            let _ = socket.close(Some(1011), Some("usage accounting unavailable"));
+                            return Ok(());
+                        }
+                    };
+                    socket.serialize_attachment(&attachment)?;
+                    if exceeded {
+                        cancel_active_turn(&self.runtime, "connection_quota_exceeded", false);
+                        send_error(
+                            &self.runtime,
+                            control.turn_id().map(TurnId::get),
+                            "queue_overflow",
+                            true,
+                        );
+                        let _ = socket.close(Some(4008), Some("daily device quota exceeded"));
+                        return Ok(());
+                    }
+                }
+                socket.serialize_attachment(&attachment)?;
                 self.handle_control(&socket, attachment, control).await
             }
             WebSocketIncomingMessage::Binary(bytes) => {
@@ -379,6 +744,47 @@ impl DurableObject for VoiceSession {
                     let _ = socket.close(Some(1002), Some("hello required"));
                     return Ok(());
                 }
+                let payload_bytes = bytes
+                    .len()
+                    .saturating_sub(crate::realtime_protocol::AUDIO_HEADER_LEN);
+                attachment.audio_bytes = attachment
+                    .audio_bytes
+                    .saturating_add(u64::try_from(payload_bytes).unwrap_or(u64::MAX));
+                attachment.unpersisted_audio_bytes = attachment
+                    .unpersisted_audio_bytes
+                    .saturating_add(u64::try_from(payload_bytes).unwrap_or(u64::MAX));
+                let maximum_audio_bytes = u64::from(config.max_connection_audio_seconds)
+                    .saturating_mul(u64::from(AUDIO_SAMPLE_RATE))
+                    .saturating_mul(2);
+                if attachment.audio_bytes > maximum_audio_bytes {
+                    cancel_active_turn(&self.runtime, "connection_quota_exceeded", false);
+                    send_error(&self.runtime, None, "queue_overflow", true);
+                    let _ = socket.close(Some(4008), Some("connection audio quota exceeded"));
+                    return Ok(());
+                }
+                if attachment.unpersisted_message_count >= USAGE_MESSAGE_FLUSH_INTERVAL
+                    || attachment.unpersisted_audio_bytes >= USAGE_AUDIO_FLUSH_BYTES
+                    || payload_bytes < DEVICE_AUDIO_CHUNK_BYTES
+                {
+                    let exceeded = match self
+                        .flush_attachment_usage(&config, &mut attachment, false)
+                        .await
+                    {
+                        Ok(exceeded) => exceeded,
+                        Err(_) => {
+                            send_error(&self.runtime, None, "internal_error", true);
+                            let _ = socket.close(Some(1011), Some("usage accounting unavailable"));
+                            return Ok(());
+                        }
+                    };
+                    if exceeded {
+                        cancel_active_turn(&self.runtime, "connection_quota_exceeded", false);
+                        send_error(&self.runtime, None, "queue_overflow", true);
+                        let _ = socket.close(Some(4008), Some("daily device quota exceeded"));
+                        return Ok(());
+                    }
+                }
+                socket.serialize_attachment(&attachment)?;
                 self.handle_audio(&bytes).await
             }
         }
@@ -391,6 +797,7 @@ impl DurableObject for VoiceSession {
         _reason: String,
         _was_clean: bool,
     ) -> Result<()> {
+        self.flush_socket_usage(&socket).await;
         let is_current = self
             .runtime
             .borrow()
@@ -407,6 +814,7 @@ impl DurableObject for VoiceSession {
     }
 
     async fn websocket_error(&self, socket: WebSocket, _error: Error) -> Result<()> {
+        self.flush_socket_usage(&socket).await;
         let is_current = self
             .runtime
             .borrow()
@@ -424,6 +832,42 @@ impl DurableObject for VoiceSession {
 }
 
 impl VoiceSession {
+    async fn flush_attachment_usage(
+        &self,
+        config: &Config,
+        attachment: &mut DeviceAttachment,
+        turn_attempt: bool,
+    ) -> Result<bool> {
+        let delta = UsageDelta {
+            message_count: u64::from(attachment.unpersisted_message_count),
+            turn_attempt_count: u64::from(turn_attempt),
+            audio_bytes: attachment.unpersisted_audio_bytes,
+        };
+        let exceeded = charge_usage_budget(&self.storage, config, delta).await?;
+        attachment.unpersisted_message_count = 0;
+        attachment.unpersisted_audio_bytes = 0;
+        Ok(exceeded)
+    }
+
+    async fn flush_socket_usage(&self, socket: &WebSocket) {
+        let Ok(Some(mut attachment)) = socket.deserialize_attachment::<DeviceAttachment>() else {
+            return;
+        };
+        if attachment.unpersisted_message_count == 0 && attachment.unpersisted_audio_bytes == 0 {
+            return;
+        }
+        let Ok(config) = Config::from_env(&self.env) else {
+            return;
+        };
+        if self
+            .flush_attachment_usage(&config, &mut attachment, false)
+            .await
+            .is_ok()
+        {
+            let _ = socket.serialize_attachment(&attachment);
+        }
+    }
+
     async fn handle_control(
         &self,
         socket: &WebSocket,
@@ -433,7 +877,9 @@ impl VoiceSession {
         match control {
             ControlMessage::Hello { .. } => {
                 if attachment.hello_received {
-                    send_error(&self.runtime, None, "duplicate_hello", false);
+                    cancel_active_turn(&self.runtime, "protocol_error", false);
+                    send_error(&self.runtime, None, "protocol_error", true);
+                    let _ = socket.close(Some(1002), Some("duplicate hello"));
                     return Ok(());
                 }
                 attachment.hello_received = true;
@@ -582,11 +1028,17 @@ impl VoiceSession {
                 prior_response_id: None,
                 next_input_seq: 0,
                 input_samples: 0,
-                max_input_samples: config.max_audio_seconds.saturating_mul(AUDIO_SAMPLE_RATE),
+                max_input_samples: config
+                    .realtime_max_audio_seconds
+                    .saturating_mul(AUDIO_SAMPLE_RATE),
                 last_input_ack: None,
+                short_input_frame_seen: false,
                 stt_pending: Vec::with_capacity(DEVICE_AUDIO_CHUNK_BYTES * 2),
                 next_output_seq: 0,
                 output_samples: 0,
+                max_output_samples: config
+                    .realtime_max_output_seconds
+                    .saturating_mul(AUDIO_SAMPLE_RATE),
                 last_output_ack: None,
                 output_ack_tx: None,
                 stt: None,
@@ -630,6 +1082,10 @@ impl VoiceSession {
         {
             Ok(ReconcileOutcome::Current) => {}
             Ok(ReconcileOutcome::Stale) => return Ok(()),
+            Ok(ReconcileOutcome::Ambiguous) => {
+                fail_turn_if_current(&self.runtime, turn_id, generation, "conversation_ambiguous");
+                return Ok(());
+            }
             Err(_) => {
                 fail_turn_if_current(&self.runtime, turn_id, generation, "recovery_unavailable");
                 return Ok(());
@@ -777,7 +1233,11 @@ impl VoiceSession {
         let (stt, pending, generation) = match stt_result {
             Ok(result) => result,
             Err(code) => {
-                send_error(&self.runtime, Some(turn_id), code, false);
+                if let Some(generation) = current_generation(&self.runtime, turn_id) {
+                    fail_turn_if_current(&self.runtime, turn_id, generation, code);
+                } else {
+                    send_error(&self.runtime, Some(turn_id), code, false);
+                }
                 return Ok(());
             }
         };
@@ -794,19 +1254,22 @@ impl VoiceSession {
                 fail_turn_if_current(&self.runtime, turn_id, generation, "stt_send_failed");
                 return Ok(());
             }
-            if let Some(turn) = self.runtime.borrow_mut().turn.as_mut() {
-                if turn.id == turn_id {
-                    turn.last_input_ack = Some(last_seq);
-                }
-            }
-            send_device_control(
+            if !send_device_control(
                 &self.runtime,
                 &ControlMessage::InputAck {
                     v: WIRE_PROTOCOL_VERSION,
                     turn_id: TurnId::new(turn_id),
                     seq: last_seq,
                 },
-            );
+            ) {
+                fail_turn_if_current(&self.runtime, turn_id, generation, "device_send_failed");
+                return Ok(());
+            }
+            if let Some(turn) = self.runtime.borrow_mut().turn.as_mut() {
+                if turn.id == turn_id {
+                    turn.last_input_ack = Some(last_seq);
+                }
+            }
             mark_stage(&self.runtime, turn_id, generation, "input_committed");
         }
         Ok(())
@@ -816,11 +1279,11 @@ impl VoiceSession {
         let frame = match decode_audio_frame(bytes, MAX_AUDIO_PAYLOAD_BYTES) {
             Ok(frame) if frame.header.kind == AudioKind::MicrophonePcm => frame,
             Ok(_) => {
-                send_error(&self.runtime, None, "invalid_audio_direction", false);
+                fail_active_turn(&self.runtime, "invalid_audio_direction");
                 return Ok(());
             }
             Err(_) => {
-                send_error(&self.runtime, None, "invalid_audio_frame", false);
+                fail_active_turn(&self.runtime, "invalid_audio_frame");
                 return Ok(());
             }
         };
@@ -867,32 +1330,43 @@ impl VoiceSession {
                 {
                     InputAction::Fail("input_sequence_mismatch", turn.generation)
                 }
+                Some(turn) if turn.short_input_frame_seen => {
+                    InputAction::Fail("invalid_audio_frame", turn.generation)
+                }
                 Some(turn) => {
-                    let samples = u32::try_from(frame.pcm.len() / 2)
-                        .map_err(|_| Error::RustError("audio frame too large".into()))?;
-                    let next_samples = turn.input_samples.saturating_add(samples);
-                    if next_samples > turn.max_input_samples {
-                        InputAction::Fail("audio_too_long", turn.generation)
+                    if !input_credit_available(turn.next_input_seq, turn.last_input_ack) {
+                        InputAction::Fail("input_backpressure", turn.generation)
                     } else {
-                        let stt = turn.stt.clone();
-                        let ack = if frame.header.sequence % INPUT_ACK_INTERVAL
-                            == INPUT_ACK_INTERVAL - 1
-                        {
-                            turn.last_input_ack = Some(frame.header.sequence);
-                            Some(frame.header.sequence)
+                        let samples = u32::try_from(frame.pcm.len() / 2)
+                            .map_err(|_| Error::RustError("audio frame too large".into()))?;
+                        let next_samples = turn.input_samples.saturating_add(samples);
+                        if next_samples > turn.max_input_samples {
+                            InputAction::Fail("audio_too_long", turn.generation)
                         } else {
-                            None
-                        };
-                        turn.next_input_seq += 1;
-                        turn.input_samples = next_samples;
-                        turn.stt_pending.extend_from_slice(frame.pcm);
-                        let audio = (turn.stt_pending.len() >= DEVICE_AUDIO_CHUNK_BYTES * 2)
-                            .then(|| std::mem::take(&mut turn.stt_pending));
-                        InputAction::Forward {
-                            stt,
-                            ack,
-                            turn_id: turn.id,
-                            audio,
+                            if frame.pcm.len() < DEVICE_AUDIO_CHUNK_BYTES {
+                                // Firmware emits at most one short frame when
+                                // capture drains. No audio may follow it.
+                                turn.short_input_frame_seen = true;
+                            }
+                            let stt = turn.stt.clone();
+                            let ack = if frame.header.sequence % INPUT_ACK_INTERVAL
+                                == INPUT_ACK_INTERVAL - 1
+                            {
+                                Some(frame.header.sequence)
+                            } else {
+                                None
+                            };
+                            turn.next_input_seq += 1;
+                            turn.input_samples = next_samples;
+                            turn.stt_pending.extend_from_slice(frame.pcm);
+                            let audio = (turn.stt_pending.len() >= DEVICE_AUDIO_CHUNK_BYTES * 2)
+                                .then(|| std::mem::take(&mut turn.stt_pending));
+                            InputAction::Forward {
+                                stt,
+                                ack,
+                                turn_id: turn.id,
+                                audio,
+                            }
                         }
                     }
                 }
@@ -906,7 +1380,11 @@ impl VoiceSession {
                 audio,
             } => (stt, ack, turn_id, audio),
             InputAction::Reject(code) => {
-                send_error(&self.runtime, Some(frame_turn_id), code, false);
+                if let Some(generation) = current_generation(&self.runtime, frame_turn_id) {
+                    fail_turn_if_current(&self.runtime, frame_turn_id, generation, code);
+                } else {
+                    send_error(&self.runtime, Some(frame_turn_id), code, false);
+                }
                 return Ok(());
             }
             InputAction::Fail(code, generation) => {
@@ -915,7 +1393,9 @@ impl VoiceSession {
             }
         };
         let Some(stt) = stt else {
-            send_error(&self.runtime, Some(turn_id), "stt_unavailable", false);
+            if let Some(generation) = current_generation(&self.runtime, turn_id) {
+                fail_turn_if_current(&self.runtime, turn_id, generation, "stt_unavailable");
+            }
             return Ok(());
         };
         if let Some(audio) = audio {
@@ -944,17 +1424,32 @@ impl VoiceSession {
             }
         }
         if let Some(sequence) = ack {
-            send_device_control(
+            if !send_device_control(
                 &self.runtime,
                 &ControlMessage::InputAck {
                     v: WIRE_PROTOCOL_VERSION,
                     turn_id: TurnId::new(turn_id),
                     seq: sequence,
                 },
-            );
+            ) {
+                if let Some(generation) = current_generation(&self.runtime, turn_id) {
+                    fail_turn_if_current(&self.runtime, turn_id, generation, "device_send_failed");
+                }
+                return Ok(());
+            }
+            if let Some(turn) = self.runtime.borrow_mut().turn.as_mut() {
+                if turn.id == turn_id {
+                    turn.last_input_ack = Some(sequence);
+                }
+            }
         }
         Ok(())
     }
+}
+
+fn input_credit_available(next_sequence: u32, last_ack: Option<u32>) -> bool {
+    let acknowledged = last_ack.map_or(0, |sequence| sequence.saturating_add(1));
+    next_sequence.saturating_sub(acknowledged) < 32
 }
 
 fn send_ready(socket: &WebSocket, conversation_id: &str) -> Result<()> {
@@ -1020,6 +1515,26 @@ fn valid_hermes_session_id(value: &str) -> bool {
 }
 
 fn valid_conversation_binding(binding: &ConversationBinding) -> bool {
+    let fingerprint_only = binding.fingerprint.len() == 64
+        && binding
+            .fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && binding.hermes_base_url.is_empty()
+        && binding.hermes_model.is_empty()
+        && binding.hermes_session_key.is_empty()
+        && binding.hermes_profile_id.is_empty()
+        && binding.binding_revision.is_empty();
+    if fingerprint_only {
+        return true;
+    }
+    if !binding.fingerprint.is_empty() {
+        return false;
+    }
+
+    // Accept the pre-v0.3 representation only for one migration read. It will
+    // compare unequal to the current fingerprint, rotate the conversation,
+    // and never be persisted again.
     let valid_url = Url::parse(&binding.hermes_base_url).is_ok_and(|url| {
         url.scheme() == "https"
             && url.host_str().is_some()
@@ -1047,6 +1562,18 @@ fn valid_conversation_binding(binding: &ConversationBinding) -> bool {
             .hermes_session_key
             .bytes()
             .any(|byte| byte.is_ascii_control())
+        && (binding.hermes_profile_id.is_empty()
+            || (binding.hermes_profile_id.len() <= 160
+                && binding.hermes_profile_id.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric()
+                        || matches!(byte, b'-' | b'_' | b'.' | b'/' | b':' | b'@')
+                })))
+        && (binding.binding_revision.is_empty()
+            || (binding.binding_revision.len() <= 160
+                && binding.binding_revision.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric()
+                        || matches!(byte, b'-' | b'_' | b'.' | b'/' | b':' | b'@')
+                })))
 }
 
 fn validate_conversation_state(state: &ConversationState) -> Result<()> {
@@ -1118,7 +1645,6 @@ async fn load_conversation_state(storage: &Storage) -> Result<ConversationState>
         .await?
     {
         validate_conversation_state(&conversation)?;
-        let _ = storage.delete(STORAGE_LAST_COMPLETED_RESPONSE).await;
         return Ok(conversation);
     }
 
@@ -1147,9 +1673,6 @@ async fn reset_conversation_storage(
     }
     let current = load_conversation_state(storage).await?;
     if current.last_reset_request_id.as_deref() == Some(request_id) {
-        // Complete any cleanup that may have failed after the durable reset
-        // write but before its acknowledgement was delivered.
-        let _ = storage.delete(STORAGE_LAST_COMPLETED_RESPONSE).await;
         return Ok(current);
     }
     let conversation = fresh_conversation_state(
@@ -1220,10 +1743,7 @@ async fn prepare_conversation_for_turn(
     {
         let conversation = fresh_conversation_state(random_conversation_id()?, None, Some(binding));
         persist_conversation_state(storage, &conversation).await?;
-        worker::console_log!(
-            "voice_conversation event=rotated reason=binding_changed conversation_id={}",
-            conversation.conversation_id
-        );
+        worker::console_log!("voice_conversation event=rotated reason=binding_changed");
         return Ok(conversation);
     }
     if current.binding.is_none() {
@@ -1235,10 +1755,7 @@ async fn prepare_conversation_for_turn(
     }
     let conversation = fresh_conversation_state(random_conversation_id()?, None, Some(binding));
     persist_conversation_state(storage, &conversation).await?;
-    worker::console_log!(
-        "voice_conversation event=rotated reason=idle conversation_id={}",
-        conversation.conversation_id
-    );
+    worker::console_log!("voice_conversation event=rotated reason=idle");
     Ok(conversation)
 }
 
@@ -1263,6 +1780,7 @@ async fn initialize_turn_storage(storage: &Storage, turn_hex: &str) -> Result<St
                 conversation_id: Some(conversation.conversation_id.clone()),
                 prior_response_id: prior_response_id.clone(),
                 inflight_response_id: None,
+                idempotency_key: None,
                 state: "capturing".into(),
             },
         })
@@ -1334,9 +1852,9 @@ async fn promote_current_response(
         ));
     }
     conversation.last_completed_response_id = Some(completed_response_id.to_string());
-    if hermes_session_id.is_some() {
-        conversation.hermes_session_id = hermes_session_id;
-    }
+    // Absence is authoritative too; do not retain stale metadata from an
+    // upstream deployment that stopped emitting the continuity header.
+    conversation.hermes_session_id = hermes_session_id;
     conversation.last_activity_unix_ms = Some(unix_now_ms());
     validate_conversation_state(&conversation)?;
     storage
@@ -1382,20 +1900,21 @@ fn current_turn_matches(runtime: &Rc<RefCell<Runtime>>, turn_id: u64, generation
     current_generation(runtime, turn_id) == Some(generation)
 }
 
-fn send_device_control(runtime: &Rc<RefCell<Runtime>>, control: &ControlMessage) {
+fn send_device_control(runtime: &Rc<RefCell<Runtime>>, control: &ControlMessage) -> bool {
     let _message_type = control.message_type();
     if control
         .validate_direction(ControlDirection::GatewayToDevice)
         .is_err()
     {
-        return;
+        return false;
     }
     let Ok(encoded) = encode_control_message(control, MAX_CONTROL_MESSAGE_BYTES) else {
-        return;
+        return false;
     };
     if let Some(device) = runtime.borrow().device.as_ref() {
-        let _ = device.send_with_str(encoded);
+        return device.send_with_str(encoded).is_ok();
     }
+    false
 }
 
 fn send_error(
@@ -1404,6 +1923,7 @@ fn send_error(
     code: &'static str,
     fatal: bool,
 ) {
+    let code = public_error_code(code);
     send_device_control(
         runtime,
         &ControlMessage::Error {
@@ -1414,6 +1934,55 @@ fn send_error(
             fatal: Some(fatal),
         },
     );
+}
+
+fn public_error_code(code: &'static str) -> &'static str {
+    match code {
+        "protocol_error"
+        | "unsupported_version"
+        | "invalid_frame"
+        | "sequence_error"
+        | "turn_conflict"
+        | "unknown_turn"
+        | "queue_overflow"
+        | "turn_timeout"
+        | "conversation_busy"
+        | "conversation_reset_failed"
+        | "conversation_unavailable"
+        | "conversation_expired"
+        | "conversation_ambiguous"
+        | "stt_failed"
+        | "empty_transcript"
+        | "hermes_failed"
+        | "tts_failed"
+        | "cancelled"
+        | "configuration_error"
+        | "authentication_failed"
+        | "internal_error" => code,
+        "invalid_control" | "invalid_direction" | "hello_required" | "duplicate_hello" => {
+            "protocol_error"
+        }
+        "invalid_audio_frame" | "invalid_audio_direction" => "invalid_frame",
+        "input_sequence_mismatch" | "audio_discontinuity" => "sequence_error",
+        "duplicate_turn" | "turn_in_progress" => "turn_conflict",
+        "stale_turn" | "stale_audio" | "turn_not_ready" => "unknown_turn",
+        "input_backpressure" | "connection_quota_exceeded" => "queue_overflow",
+        "audio_too_long" => "turn_timeout",
+        "recovery_unavailable" => "conversation_unavailable",
+        "stt_connect_failed"
+        | "stt_send_failed"
+        | "stt_stream_failed"
+        | "stt_unavailable"
+        | "stt_unexpected_commit" => "stt_failed",
+        "hermes_configuration_failed" | "hermes_connect_failed" | "hermes_busy" => "hermes_failed",
+        "provider_connect_timeout" => "turn_timeout",
+        "tts_connect_failed" => "tts_failed",
+        "device_cancelled"
+        | "connection_replaced"
+        | "device_disconnected"
+        | "device_socket_error" => "cancelled",
+        _ => "internal_error",
+    }
 }
 
 fn current_generation(runtime: &Rc<RefCell<Runtime>>, turn_id: u64) -> Option<u64> {
@@ -1497,6 +2066,19 @@ fn fail_turn_if_current(
     }
 }
 
+fn fail_active_turn(runtime: &Rc<RefCell<Runtime>>, code: &'static str) {
+    let active = runtime
+        .borrow()
+        .turn
+        .as_ref()
+        .map(|turn| (turn.id, turn.generation));
+    if let Some((turn_id, generation)) = active {
+        fail_turn_if_current(runtime, turn_id, generation, code);
+    } else {
+        send_error(runtime, None, code, false);
+    }
+}
+
 fn mark_stage(runtime: &Rc<RefCell<Runtime>>, turn_id: u64, generation: u64, stage: &'static str) {
     let elapsed = runtime
         .borrow()
@@ -1539,6 +2121,14 @@ async fn connect_stt(config: &Config, signal: &worker::AbortSignal) -> Result<We
         query.append_pair("audio_format", "pcm_16000");
         query.append_pair("commit_strategy", "manual");
         query.append_pair("include_timestamps", "false");
+        query.append_pair(
+            "enable_logging",
+            if config.elevenlabs_enable_logging {
+                "true"
+            } else {
+                "false"
+            },
+        );
         if let Some(language) = config.stt_language_code.as_deref() {
             query.append_pair("language_code", language);
         }
@@ -1559,6 +2149,14 @@ async fn connect_tts(config: &Config, signal: &worker::AbortSignal) -> Result<We
         query.append_pair("auto_mode", "true");
         query.append_pair("sync_alignment", "false");
         query.append_pair("inactivity_timeout", "180");
+        query.append_pair(
+            "enable_logging",
+            if config.elevenlabs_enable_logging {
+                "true"
+            } else {
+                "false"
+            },
+        );
     }
     connect_provider_websocket(url, &config.elevenlabs_api_key, signal).await
 }
@@ -1576,7 +2174,9 @@ async fn connect_provider_websocket(
         .with_headers(headers)
         // Cloudflare forwards custom secret headers across followed redirects.
         // Provider authentication must never leave the configured origin.
-        .with_redirect(RequestRedirect::Error);
+        // workerd supports follow/manual but not error. Manual surfaces a 30x
+        // response; requiring 101 below rejects it without following Location.
+        .with_redirect(RequestRedirect::Manual);
     let request = Request::new_with_init(url.as_str(), &init)?;
     let fetch = Fetch::Request(request);
     let response = fetch.send_with_signal(signal).await?;
@@ -1638,7 +2238,7 @@ async fn listen_stt(
                                         set_turn_phase(
                                             turn,
                                             TurnPhase::StreamingInput,
-                                            u64::from(config.max_audio_seconds)
+                                            u64::from(config.realtime_max_audio_seconds)
                                                 .saturating_add(STT_SESSION_TIMEOUT_SECONDS),
                                         );
                                         true
@@ -1649,13 +2249,15 @@ async fn listen_stt(
                         };
                         if became_ready {
                             mark_stage(&runtime, turn_id, generation, "stt_session_ready");
-                            send_device_control(
+                            if !send_device_control(
                                 &runtime,
                                 &ControlMessage::TurnReady {
                                     v: WIRE_PROTOCOL_VERSION,
                                     turn_id: TurnId::new(turn_id),
                                 },
-                            );
+                            ) {
+                                return Err(Error::RustError("device rejected turn.ready".into()));
+                            }
                         }
                     }
                     // Partials are mutable telemetry, not agent input. The
@@ -1664,13 +2266,16 @@ async fn listen_stt(
                     // provider burst to crowd out authoritative controls.
                     "partial_transcript" => {}
                     "committed_transcript" => {
-                        let transcript = bounded_text(&value, "text", MAX_TRANSCRIPT_CHARS)
-                            .map(str::trim)
-                            .filter(|text| !text.is_empty())
-                            .ok_or_else(|| {
-                                Error::RustError("STT returned an empty transcript".into())
-                            })?
-                            .to_string();
+                        let transcript = bounded_text(
+                            &value,
+                            "text",
+                            MAX_TRANSCRIPT_CHARS,
+                            MAX_TRANSCRIPT_BYTES,
+                        )
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .ok_or_else(|| Error::RustError("STT returned an empty transcript".into()))?
+                        .to_string();
                         let valid_phase = {
                             let mut state = runtime.borrow_mut();
                             state
@@ -1698,14 +2303,10 @@ async fn listen_stt(
                         }
                         let _ = stt.close(Some(1000), Some("transcript committed"));
                         mark_stage(&runtime, turn_id, generation, "stt_final");
-                        send_device_control(
-                            &runtime,
-                            &ControlMessage::TranscriptFinal {
-                                v: WIRE_PROTOCOL_VERSION,
-                                turn_id: TurnId::new(turn_id),
-                                text: transcript.clone(),
-                            },
-                        );
+                        // The firmware has no transcript UI. Do not send user
+                        // speech back over the device control plane, where a
+                        // long UTF-8 transcript could exceed the 8 KiB frame
+                        // bound and where it adds unnecessary PII exposure.
                         return run_agent_pipeline(
                             runtime, storage, config, device_id, turn_id, generation, transcript,
                         )
@@ -1763,9 +2364,14 @@ async fn next_provider_event_before_deadline(
     }
 }
 
-fn bounded_text<'a>(value: &'a Value, key: &str, max_chars: usize) -> Option<&'a str> {
+fn bounded_text<'a>(
+    value: &'a Value,
+    key: &str,
+    max_chars: usize,
+    max_bytes: usize,
+) -> Option<&'a str> {
     let text = value.get(key)?.as_str()?;
-    (text.chars().count() <= max_chars).then_some(text)
+    (text.len() <= max_bytes && text.chars().count() <= max_chars).then_some(text)
 }
 
 async fn run_agent_pipeline(
@@ -1791,6 +2397,7 @@ async fn run_agent_pipeline(
                 .map(|conversation_id| (conversation_id, turn.prior_response_id.clone()))
         })
         .ok_or_else(|| Error::RustError("turn has no conversation".into()))?;
+    let idempotency_key = hermes_idempotency_key(&conversation_id, turn_id);
     write_current_turn_journal(
         &storage,
         &runtime,
@@ -1801,6 +2408,7 @@ async fn run_agent_pipeline(
             conversation_id: Some(conversation_id),
             prior_response_id: prior_response_id.clone(),
             inflight_response_id: None,
+            idempotency_key: Some(idempotency_key.clone()),
             state: "starting_hermes".into(),
         },
     )
@@ -1808,13 +2416,6 @@ async fn run_agent_pipeline(
     if !current_turn_matches(&runtime, turn_id, generation) {
         return Ok(());
     }
-    send_device_control(
-        &runtime,
-        &ControlMessage::ResponseStart {
-            v: WIRE_PROTOCOL_VERSION,
-            turn_id: TurnId::new(turn_id),
-        },
-    );
     mark_stage(&runtime, turn_id, generation, "hermes_start");
 
     let tts_signal = {
@@ -1889,6 +2490,19 @@ async fn run_agent_pipeline(
             return Ok(());
         }
     };
+    // This means the authenticated Hermes origin accepted the streaming
+    // request, not merely that the gateway began attempting a connection.
+    if !send_device_control(
+        &runtime,
+        &ControlMessage::ResponseStart {
+            v: WIRE_PROTOCOL_VERSION,
+            turn_id: TurnId::new(turn_id),
+        },
+    ) {
+        let _ = tts.close(Some(1000), Some("device unavailable"));
+        fail_turn_if_current(&runtime, turn_id, generation, "device_send_failed");
+        return Ok(());
+    }
     {
         let mut state = runtime.borrow_mut();
         let Some(turn) = state
@@ -1929,12 +2543,20 @@ async fn open_hermes_stream(
     turn_id: u64,
     generation: u64,
 ) -> std::result::Result<Response, &'static str> {
+    let idempotency_key = runtime
+        .borrow()
+        .turn
+        .as_ref()
+        .filter(|turn| turn.id == turn_id && turn.generation == generation)
+        .and_then(|turn| turn.conversation_id.as_deref())
+        .map(|conversation_id| hermes_idempotency_key(conversation_id, turn_id))
+        .ok_or("stale_turn")?;
     let endpoint = api_endpoint_url(&config.hermes_base_url, "responses")
         .map_err(|_| "hermes_configuration_failed")?;
     let mut body = json!({
         "model": config.hermes_model,
         "input": transcript,
-        "instructions": VOICE_INSTRUCTIONS,
+        "instructions": config.hermes_voice_instructions,
         "stream": true,
         "store": true
     });
@@ -1961,6 +2583,9 @@ async fn open_hermes_stream(
             &config.hermes_session_key(device_id),
         )
         .map_err(|_| "hermes_configuration_failed")?;
+    headers
+        .set("Idempotency-Key", &idempotency_key)
+        .map_err(|_| "hermes_configuration_failed")?;
     if let (Some(client_id), Some(client_secret)) = (
         config.cf_access_client_id.as_deref(),
         config.cf_access_client_secret.as_deref(),
@@ -1976,7 +2601,9 @@ async fn open_hermes_stream(
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
         .with_headers(headers)
-        .with_redirect(RequestRedirect::Error)
+        // Manual is workerd's fail-closed redirect mode: any 30x is returned
+        // to this code and rejected by the explicit status handling below.
+        .with_redirect(RequestRedirect::Manual)
         .with_body(Some(JsValue::from_str(
             &serde_json::to_string(&body).map_err(|_| "hermes_configuration_failed")?,
         )));
@@ -1995,12 +2622,20 @@ async fn open_hermes_stream(
         };
         turn.hermes_abort = Some(controller);
     }
-    let response = Fetch::Request(request)
+    let mut response = Fetch::Request(request)
         .send_with_signal(&signal)
         .await
         .map_err(|_| "hermes_connect_failed")?;
     match response.status_code() {
-        200..=299 => {
+        200 => {
+            let content_type = response
+                .headers()
+                .get("Content-Type")
+                .map_err(|_| "hermes_connect_failed")?
+                .ok_or("hermes_connect_failed")?;
+            if !is_event_stream_content_type(&content_type) {
+                return Err("hermes_connect_failed");
+            }
             let hermes_session_id = response
                 .headers()
                 .get("X-Hermes-Session-Id")
@@ -2024,10 +2659,65 @@ async fn open_hermes_stream(
             mark_stage(runtime, turn_id, generation, "hermes_headers");
             Ok(response)
         }
-        404 if prior_response_id.is_some() => Err("conversation_expired"),
+        404 if prior_response_id.is_some() => {
+            let prior_response_id = prior_response_id.expect("matched Some above");
+            let body = read_response_limited(&mut response, MAX_HERMES_ERROR_BYTES)
+                .await
+                .map_err(|_| "hermes_connect_failed")?;
+            if is_missing_previous_response_error(&body, prior_response_id) {
+                Err("conversation_expired")
+            } else {
+                Err("hermes_connect_failed")
+            }
+        }
         429 => Err("hermes_busy"),
         _ => Err("hermes_connect_failed"),
     }
+}
+
+fn is_event_stream_content_type(value: &str) -> bool {
+    value
+        .split(';')
+        .next()
+        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("text/event-stream"))
+}
+
+fn hermes_idempotency_key(conversation_id: &str, turn_id: u64) -> String {
+    format!("hv2-{conversation_id}-{}", format_turn_id(turn_id))
+}
+
+fn is_missing_previous_response_error(body: &[u8], expected_response_id: &str) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let Some(error) = value.get("error") else {
+        return false;
+    };
+    if error.get("code").and_then(Value::as_str) == Some("previous_response_not_found") {
+        return error
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains(expected_response_id));
+    }
+    let expected_message = format!("Previous response not found: {expected_response_id}");
+    error.get("type").and_then(Value::as_str) == Some("invalid_request_error")
+        && error.get("param").is_none_or(Value::is_null)
+        && error.get("code").is_none_or(Value::is_null)
+        && error.get("message").and_then(Value::as_str) == Some(expected_message.as_str())
+}
+
+fn is_missing_response_error(body: &[u8], expected_response_id: &str) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let Some(error) = value.get("error") else {
+        return false;
+    };
+    let expected_message = format!("Response not found: {expected_response_id}");
+    error.get("type").and_then(Value::as_str) == Some("invalid_request_error")
+        && error.get("param").is_none_or(Value::is_null)
+        && error.get("code").is_none_or(Value::is_null)
+        && error.get("message").and_then(Value::as_str) == Some(expected_message.as_str())
 }
 
 async fn reconcile_inflight_response(
@@ -2053,6 +2743,7 @@ async fn reconcile_inflight_response(
             conversation_id: Some(conversation.conversation_id.clone()),
             prior_response_id: conversation.last_completed_response_id.clone(),
             inflight_response_id: None,
+            idempotency_key: None,
             state: "recovered_after_conversation_boundary".into(),
             ..journal.clone()
         };
@@ -2066,12 +2757,21 @@ async fn reconcile_inflight_response(
     if journal.state == "completed" || journal.state.starts_with("recovered_") {
         return Ok(ReconcileOutcome::Current);
     }
+    if journal.state.starts_with("ambiguous_") || journal.state == "starting_hermes" {
+        // Hermes main currently ignores Idempotency-Key in the streaming
+        // Responses branch. Retrying could execute tools twice, while
+        // continuing from the old head could silently fork context. Preserve
+        // the journal and require an explicit conversation reset.
+        return Ok(ReconcileOutcome::Ambiguous);
+    }
     let Some(inflight_id) = journal.inflight_response_id.clone() else {
-        // The previous object died either before Hermes was called or in the
-        // tiny ambiguous window before response.created arrived. Never replay
-        // that turn; retain the prior completed conversation head.
+        if journal.state != "capturing" {
+            return Ok(ReconcileOutcome::Ambiguous);
+        }
+        // Capture ended before Hermes was called, so no tool or response side
+        // effect exists and accepting a new turn is safe.
         let mut recovered = journal.clone();
-        recovered.state = "recovered_without_response_id".into();
+        recovered.state = "recovered_before_hermes".into();
         write_reconciled_journal(storage, &journal, recovered, None, conversation).await?;
         return Ok(if current_turn_matches(runtime, turn_id, generation) {
             ReconcileOutcome::Current
@@ -2102,7 +2802,9 @@ async fn reconcile_inflight_response(
     let mut init = RequestInit::new();
     init.with_method(Method::Get)
         .with_headers(headers)
-        .with_redirect(RequestRedirect::Error);
+        // Do not follow a credentialed recovery request. The status handling
+        // below accepts only the exact expected success/404 contracts.
+        .with_redirect(RequestRedirect::Manual);
     let request = Request::new_with_init(endpoint.as_str(), &init)?;
     let controller = AbortController::default();
     let signal = controller.signal();
@@ -2124,10 +2826,16 @@ async fn reconcile_inflight_response(
         return Ok(ReconcileOutcome::Stale);
     }
     if response.status_code() == 404 {
-        let mut recovered = journal.clone();
-        recovered.state = "recovered_missing".into();
-        write_reconciled_journal(storage, &journal, recovered, None, conversation).await?;
-        return Ok(ReconcileOutcome::Current);
+        let body = read_response_limited(&mut response, MAX_HERMES_ERROR_BYTES).await?;
+        if !is_missing_response_error(&body, &inflight_id) {
+            return Err(Error::RustError(
+                "Hermes response reconciliation route returned 404".into(),
+            ));
+        }
+        let mut ambiguous = journal.clone();
+        ambiguous.state = "ambiguous_missing_response".into();
+        write_reconciled_journal(storage, &journal, ambiguous, None, conversation).await?;
+        return Ok(ReconcileOutcome::Ambiguous);
     }
     if !(200..300).contains(&response.status_code()) {
         return Err(Error::RustError(
@@ -2170,9 +2878,10 @@ async fn reconcile_inflight_response(
         )
         .await?;
     } else {
-        let mut recovered = journal.clone();
-        recovered.state = "recovered_incomplete".into();
-        write_reconciled_journal(storage, &journal, recovered, None, conversation).await?;
+        let mut ambiguous = journal.clone();
+        ambiguous.state = "ambiguous_incomplete_response".into();
+        write_reconciled_journal(storage, &journal, ambiguous, None, conversation).await?;
+        return Ok(ReconcileOutcome::Ambiguous);
     }
     Ok(ReconcileOutcome::Current)
 }
@@ -2239,12 +2948,8 @@ async fn consume_hermes_stream(
     generation: u64,
     mut response: Response,
 ) -> Result<()> {
-    let content_type = response
-        .headers()
-        .get("Content-Type")?
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if !content_type.starts_with("text/event-stream") {
+    let content_type = response.headers().get("Content-Type")?.unwrap_or_default();
+    if !is_event_stream_content_type(&content_type) {
         return Err(Error::RustError(
             "Hermes did not return an SSE response".into(),
         ));
@@ -2407,9 +3112,10 @@ async fn apply_hermes_event(
                 generation,
                 TurnJournal {
                     turn_id: format_turn_id(turn_id),
-                    conversation_id: Some(conversation_id),
+                    conversation_id: Some(conversation_id.clone()),
                     prior_response_id,
                     inflight_response_id: Some(id),
+                    idempotency_key: Some(hermes_idempotency_key(&conversation_id, turn_id)),
                     state: "hermes_in_progress".into(),
                 },
             )
@@ -2522,19 +3228,17 @@ fn send_tts_phrase(
     sanitizer: &mut StreamingTtsSanitizer,
     spoken_chars: &mut usize,
 ) -> Result<bool> {
-    if *spoken_chars >= MAX_TTS_CHARS {
-        return Ok(false);
-    }
     let cleaned = sanitizer.push_phrase(raw_phrase);
     if cleaned.is_empty() {
         return Ok(false);
     }
-    let remaining = MAX_TTS_CHARS - *spoken_chars;
-    let phrase: String = cleaned.chars().take(remaining).collect();
-    if phrase.is_empty() {
-        return Ok(false);
+    let phrase_chars = cleaned.chars().count();
+    if spoken_chars.saturating_add(phrase_chars) > MAX_TTS_CHARS {
+        return Err(Error::RustError(
+            "Hermes response exceeds the configured speech limit".into(),
+        ));
     }
-    *spoken_chars += phrase.chars().count();
+    *spoken_chars += phrase_chars;
     let tts = runtime
         .borrow()
         .turn
@@ -2544,7 +3248,7 @@ fn send_tts_phrase(
         .ok_or_else(|| Error::RustError("TTS websocket is unavailable".into()))?;
     tts.send(&json!({
         "context_id": format_turn_id(turn_id),
-        "text": format!("{phrase} ")
+        "text": format!("{cleaned} ")
     }))?;
     Ok(true)
 }
@@ -2567,6 +3271,13 @@ async fn listen_tts(
         BoundedWebSocketEvents::new(&tts, MAX_TTS_EVENT_BYTES, PROVIDER_EVENT_QUEUE_CAPACITY)?;
     tts.accept()?;
     let context_id = format_turn_id(turn_id);
+    let max_output_samples = runtime
+        .borrow()
+        .turn
+        .as_ref()
+        .filter(|turn| turn.id == turn_id && turn.generation == generation)
+        .map(|turn| turn.max_output_samples)
+        .ok_or_else(|| Error::RustError("stale TTS turn".into()))?;
     let (ack_tx, mut ack_rx) = channel(1);
     {
         let mut state = runtime.borrow_mut();
@@ -2587,6 +3298,8 @@ async fn listen_tts(
         }
     }))?;
     let mut audio_started = false;
+    let mut provider_audio_bytes = 0_u64;
+    let mut reframer = PlaybackReframer::default();
 
     loop {
         if current_generation(&runtime, turn_id) != Some(generation) {
@@ -2617,12 +3330,15 @@ async fn listen_tts(
         match event {
             ProviderEvent::Text(text) => {
                 let value: Value = serde_json::from_str(&text)?;
-                if value
-                    .get("contextId")
-                    .and_then(Value::as_str)
-                    .is_some_and(|context| context != context_id)
+                let carries_context_payload = value.get("audio").is_some()
+                    || value.get("is_final").is_some()
+                    || value.get("isFinal").is_some();
+                if carries_context_payload
+                    && value.get("contextId").and_then(Value::as_str) != Some(context_id.as_str())
                 {
-                    continue;
+                    return Err(Error::RustError(
+                        "TTS event has a missing or unexpected context ID".into(),
+                    ));
                 }
                 if let Some(encoded) = value.get("audio").and_then(Value::as_str) {
                     if encoded.len() > MAX_PROVIDER_AUDIO_BYTES * 2 {
@@ -2631,26 +3347,33 @@ async fn listen_tts(
                     let audio = BASE64
                         .decode(encoded)
                         .map_err(|_| Error::RustError("TTS returned invalid audio".into()))?;
-                    if audio.is_empty()
-                        || audio.len() > MAX_PROVIDER_AUDIO_BYTES
-                        || audio.len() & 1 != 0
-                    {
+                    if audio.is_empty() || audio.len() > MAX_PROVIDER_AUDIO_BYTES {
                         return Err(Error::RustError("TTS returned invalid PCM".into()));
                     }
+                    provider_audio_bytes = checked_output_audio_total(
+                        provider_audio_bytes,
+                        audio.len(),
+                        max_output_samples,
+                    )
+                    .map_err(|message| Error::RustError(message.into()))?;
                     if !audio_started {
                         audio_started = true;
                         mark_stage(&runtime, turn_id, generation, "tts_first_audio");
-                        send_device_control(
+                        if !send_device_control(
                             &runtime,
                             &ControlMessage::TtsStart {
                                 v: WIRE_PROTOCOL_VERSION,
                                 turn_id: TurnId::new(turn_id),
                                 sample_rate: AUDIO_SAMPLE_RATE,
                             },
-                        );
+                        ) {
+                            return Err(Error::RustError("device rejected tts.start".into()));
+                        }
                     }
-                    forward_playback_audio(&runtime, turn_id, generation, &audio, &mut ack_rx)
-                        .await?;
+                    for frame in reframer.push(&audio) {
+                        send_playback_frame(&runtime, turn_id, generation, &frame, &mut ack_rx)
+                            .await?;
+                    }
                 }
                 let is_final = value
                     .get("is_final")
@@ -2661,6 +3384,13 @@ async fn listen_tts(
                     if !audio_started {
                         return Err(Error::RustError("TTS returned no audio".into()));
                     }
+                    if let Some(frame) = reframer
+                        .finish()
+                        .map_err(|message| Error::RustError(message.into()))?
+                    {
+                        send_playback_frame(&runtime, turn_id, generation, &frame, &mut ack_rx)
+                            .await?;
+                    }
                     let last_seq = runtime
                         .borrow()
                         .turn
@@ -2668,19 +3398,21 @@ async fn listen_tts(
                         .filter(|turn| turn.id == turn_id && turn.generation == generation)
                         .and_then(|turn| turn.next_output_seq.checked_sub(1))
                         .ok_or_else(|| Error::RustError("TTS sequence is empty".into()))?;
-                    send_device_control(
+                    if !send_device_control(
                         &runtime,
                         &ControlMessage::TtsEnd {
                             v: WIRE_PROTOCOL_VERSION,
                             turn_id: TurnId::new(turn_id),
                             last_seq,
                         },
-                    );
+                    ) {
+                        return Err(Error::RustError("device rejected tts.end".into()));
+                    }
                     mark_stage(&runtime, turn_id, generation, "tts_final");
                     wait_for_output_ack(&runtime, turn_id, generation, last_seq, &mut ack_rx)
                         .await?;
                     mark_stage(&runtime, turn_id, generation, "output_final_ack");
-                    send_device_control(
+                    if !send_device_control(
                         &runtime,
                         &ControlMessage::TurnDone {
                             v: WIRE_PROTOCOL_VERSION,
@@ -2688,7 +3420,9 @@ async fn listen_tts(
                             cancelled: Some(false),
                             reason: None,
                         },
-                    );
+                    ) {
+                        return Err(Error::RustError("device rejected turn.done".into()));
+                    }
                     let _ = tts.send(&json!({"close_socket": true}));
                     runtime.borrow_mut().turn = None;
                     return Ok(());
@@ -2704,43 +3438,57 @@ async fn listen_tts(
     }
 }
 
-async fn forward_playback_audio(
+fn checked_output_audio_total(
+    current_bytes: u64,
+    additional_bytes: usize,
+    max_output_samples: u32,
+) -> std::result::Result<u64, &'static str> {
+    let next_bytes = current_bytes
+        .checked_add(u64::try_from(additional_bytes).map_err(|_| "TTS audio length overflow")?)
+        .ok_or("TTS audio length overflow")?;
+    let maximum_bytes = u64::from(max_output_samples).saturating_mul(2);
+    if next_bytes > maximum_bytes {
+        return Err("TTS audio exceeds the configured turn limit");
+    }
+    Ok(next_bytes)
+}
+
+async fn send_playback_frame(
     runtime: &Rc<RefCell<Runtime>>,
     turn_id: u64,
     generation: u64,
-    audio: &[u8],
+    frame_audio: &[u8],
     ack_rx: &mut Receiver<u32>,
 ) -> Result<()> {
-    for chunk in audio.chunks(DEVICE_AUDIO_CHUNK_BYTES) {
-        remaining_turn_time(runtime, turn_id, generation)?;
-        if chunk.len() & 1 != 0 {
-            return Err(Error::RustError(
-                "TTS split an incomplete PCM sample".into(),
-            ));
-        }
-        wait_for_output_capacity(runtime, turn_id, generation, ack_rx).await?;
-        let (device, sequence, first_sample) = reserve_output_frame(
-            runtime,
-            turn_id,
-            generation,
-            u32::try_from(chunk.len() / 2).unwrap_or(u32::MAX),
-        )?;
-        let frame = encode_audio_frame(
-            &AudioHeader {
-                kind: AudioKind::PlaybackPcm,
-                flags: AudioFlags::NONE,
-                turn_id: TurnId::new(turn_id),
-                sequence,
-                first_sample,
-            },
-            chunk,
-            MAX_AUDIO_PAYLOAD_BYTES,
-        )
-        .map_err(|error| Error::RustError(error.to_string()))?;
-        device.send_with_bytes(frame)?;
-        if sequence == 0 {
-            mark_stage(runtime, turn_id, generation, "first_output_frame_sent");
-        }
+    remaining_turn_time(runtime, turn_id, generation)?;
+    if frame_audio.is_empty()
+        || frame_audio.len() > DEVICE_AUDIO_CHUNK_BYTES
+        || frame_audio.len() & 1 != 0
+    {
+        return Err(Error::RustError("invalid reframed TTS PCM".into()));
+    }
+    wait_for_output_capacity(runtime, turn_id, generation, ack_rx).await?;
+    let (device, sequence, first_sample) = reserve_output_frame(
+        runtime,
+        turn_id,
+        generation,
+        u32::try_from(frame_audio.len() / 2).unwrap_or(u32::MAX),
+    )?;
+    let frame = encode_audio_frame(
+        &AudioHeader {
+            kind: AudioKind::PlaybackPcm,
+            flags: AudioFlags::NONE,
+            turn_id: TurnId::new(turn_id),
+            sequence,
+            first_sample,
+        },
+        frame_audio,
+        MAX_AUDIO_PAYLOAD_BYTES,
+    )
+    .map_err(|error| Error::RustError(error.to_string()))?;
+    device.send_with_bytes(frame)?;
+    if sequence == 0 {
+        mark_stage(runtime, turn_id, generation, "first_output_frame_sent");
     }
     Ok(())
 }
@@ -2763,8 +3511,17 @@ fn reserve_output_frame(
         .ok_or_else(|| Error::RustError("stale TTS audio".into()))?;
     let sequence = turn.next_output_seq;
     let first_sample = turn.output_samples;
-    turn.next_output_seq = turn.next_output_seq.saturating_add(1);
-    turn.output_samples = turn.output_samples.saturating_add(samples);
+    let next_sequence = turn
+        .next_output_seq
+        .checked_add(1)
+        .ok_or_else(|| Error::RustError("TTS sequence overflow".into()))?;
+    let next_output_samples = turn
+        .output_samples
+        .checked_add(samples)
+        .filter(|total| *total <= turn.max_output_samples)
+        .ok_or_else(|| Error::RustError("TTS audio exceeds the configured turn limit".into()))?;
+    turn.next_output_seq = next_sequence;
+    turn.output_samples = next_output_samples;
     Ok((device, sequence, first_sample))
 }
 
@@ -2886,6 +3643,7 @@ mod tests {
                 conversation_id: Some("12345678-1234-1234-1234-123456789abc".into()),
                 prior_response_id: None,
                 inflight_response_id: None,
+                idempotency_key: None,
                 state: "capturing".into(),
             },
         })
@@ -2897,7 +3655,7 @@ mod tests {
     }
 
     #[test]
-    fn idle_conversation_rotation_is_off_by_default_and_boundary_exact() {
+    fn optional_idle_conversation_rotation_has_an_exact_boundary() {
         let conversation = ConversationState {
             version: CONVERSATION_STATE_VERSION,
             conversation_id: "12345678-1234-1234-1234-123456789abc".into(),
@@ -2931,9 +3689,12 @@ mod tests {
             version: CONVERSATION_STATE_VERSION,
             conversation_id: "12345678-1234-1234-1234-123456789abc".into(),
             binding: Some(ConversationBinding {
-                hermes_base_url: "https://hermes.example.com".into(),
-                hermes_model: "hermes-agent".into(),
-                hermes_session_key: "agent:main:voice:room:kitchen".into(),
+                fingerprint: "a".repeat(64),
+                hermes_base_url: String::new(),
+                hermes_model: String::new(),
+                hermes_session_key: String::new(),
+                hermes_profile_id: String::new(),
+                binding_revision: String::new(),
             }),
             last_completed_response_id: Some("resp_0123456789abcdef0123456789ab".into()),
             hermes_session_id: Some("session-alpha".into()),
@@ -2941,10 +3702,6 @@ mod tests {
             last_reset_request_id: Some("0123456789abcdef".into()),
         };
         assert!(validate_conversation_state(&valid).is_ok());
-        let mut uppercase_scheme = valid.clone();
-        uppercase_scheme.binding.as_mut().unwrap().hermes_base_url =
-            "HTTPS://hermes.example.com".into();
-        assert!(validate_conversation_state(&uppercase_scheme).is_ok());
 
         let mut invalid = valid.clone();
         invalid.conversation_id = "contains/slash".into();
@@ -2953,7 +3710,10 @@ mod tests {
         invalid.last_completed_response_id = Some("not-a-response".into());
         assert!(validate_conversation_state(&invalid).is_err());
         let mut invalid = valid.clone();
-        invalid.binding.as_mut().unwrap().hermes_session_key = " room:kitchen".into();
+        invalid.binding.as_mut().unwrap().fingerprint = "A".repeat(64);
+        assert!(validate_conversation_state(&invalid).is_err());
+        let mut invalid = valid.clone();
+        invalid.binding.as_mut().unwrap().hermes_base_url = "https://private.example".into();
         assert!(validate_conversation_state(&invalid).is_err());
         let mut invalid = valid;
         invalid.last_reset_request_id = Some("UPPERCASE00000000".into());
@@ -2976,6 +3736,7 @@ mod tests {
             conversation_id: Some(conversation.conversation_id.clone()),
             prior_response_id: Some("resp_safe".into()),
             inflight_response_id: Some("resp_candidate".into()),
+            idempotency_key: Some("hv2-test".into()),
             state: "hermes_in_progress".into(),
         };
         assert!(journal_belongs_to_conversation(&journal, &conversation));
@@ -2992,5 +3753,279 @@ mod tests {
         journal.prior_response_id = Some("resp_safe".into());
         conversation.last_reset_request_id = Some("0123456789abcdef".into());
         assert!(!journal_belongs_to_conversation(&journal, &conversation));
+    }
+
+    #[test]
+    fn hermes_404_classification_requires_the_exact_structured_error() {
+        let response_id = "resp_0123456789abcdef0123456789ab";
+        let previous = json!({
+            "error": {
+                "message": format!("Previous response not found: {response_id}"),
+                "type": "invalid_request_error",
+                "param": null,
+                "code": null
+            }
+        });
+        assert!(is_missing_previous_response_error(
+            &serde_json::to_vec(&previous).unwrap(),
+            response_id
+        ));
+        assert!(!is_missing_previous_response_error(
+            br#"{"error":{"message":"Route not found","type":"invalid_request_error","param":null,"code":null}}"#,
+            response_id
+        ));
+        assert!(!is_missing_previous_response_error(
+            &serde_json::to_vec(&previous).unwrap(),
+            "resp_different"
+        ));
+
+        let retrieval = json!({
+            "error": {
+                "message": format!("Response not found: {response_id}"),
+                "type": "invalid_request_error",
+                "param": null,
+                "code": null
+            }
+        });
+        assert!(is_missing_response_error(
+            &serde_json::to_vec(&retrieval).unwrap(),
+            response_id
+        ));
+        assert!(!is_missing_response_error(
+            br#"{"error":{"message":"Not found","type":"invalid_request_error","param":null,"code":null}}"#,
+            response_id
+        ));
+    }
+
+    #[test]
+    fn hermes_turn_idempotency_is_deterministic_and_conversation_scoped() {
+        let first = hermes_idempotency_key("conversation-a", 42);
+        assert_eq!(first, hermes_idempotency_key("conversation-a", 42));
+        assert_ne!(first, hermes_idempotency_key("conversation-a", 43));
+        assert_ne!(first, hermes_idempotency_key("conversation-b", 42));
+        assert!(first.starts_with("hv2-conversation-a-"));
+        assert!(first.len() < 128);
+    }
+
+    #[test]
+    fn hermes_stream_content_type_requires_the_exact_media_type() {
+        for valid in [
+            "text/event-stream",
+            "Text/Event-Stream",
+            " text/event-stream ; charset=utf-8",
+        ] {
+            assert!(is_event_stream_content_type(valid), "{valid}");
+        }
+        for invalid in [
+            "",
+            "text/html",
+            "application/json",
+            "text/event-stream-malformed",
+            "application/text/event-stream",
+        ] {
+            assert!(!is_event_stream_content_type(invalid), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn public_error_codes_hide_internal_provider_details() {
+        assert_eq!(
+            public_error_code("input_sequence_mismatch"),
+            "sequence_error"
+        );
+        assert_eq!(public_error_code("stt_send_failed"), "stt_failed");
+        assert_eq!(
+            public_error_code("conversation_ambiguous"),
+            "conversation_ambiguous"
+        );
+        assert_eq!(
+            public_error_code("unexpected_internal_detail"),
+            "internal_error"
+        );
+    }
+
+    #[test]
+    fn input_credit_is_a_cumulative_32_frame_window() {
+        assert!(input_credit_available(31, None));
+        assert!(!input_credit_available(32, None));
+        assert!(input_credit_available(32, Some(0)));
+        assert!(!input_credit_available(u32::MAX, Some(0)));
+    }
+
+    #[test]
+    fn legacy_raw_bindings_are_readable_only_for_rotation() {
+        let binding: ConversationBinding = serde_json::from_value(json!({
+            "hermes_base_url": "https://hermes.example.com",
+            "hermes_model": "hermes-agent",
+            "hermes_session_key": "memory:kitchen"
+        }))
+        .unwrap();
+        assert!(binding.fingerprint.is_empty());
+        assert!(valid_conversation_binding(&binding));
+    }
+
+    #[test]
+    fn current_binding_storage_contains_only_a_one_way_fingerprint() {
+        let binding = ConversationBinding {
+            fingerprint: "b".repeat(64),
+            hermes_base_url: String::new(),
+            hermes_model: String::new(),
+            hermes_session_key: String::new(),
+            hermes_profile_id: String::new(),
+            binding_revision: String::new(),
+        };
+        let value = serde_json::to_value(binding).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 1);
+        assert_eq!(value["fingerprint"], "b".repeat(64));
+    }
+
+    #[test]
+    fn legacy_journals_deserialize_without_claiming_idempotency() {
+        let journal: TurnJournal = serde_json::from_value(json!({
+            "turn_id": "000000000000002a",
+            "conversation_id": "conversation-a",
+            "prior_response_id": null,
+            "inflight_response_id": null,
+            "state": "capturing"
+        }))
+        .unwrap();
+        assert_eq!(journal.idempotency_key, None);
+    }
+
+    #[test]
+    fn playback_reframer_ignores_irregular_provider_event_boundaries() {
+        let source: Vec<u8> = (0..8_000).map(|index| (index % 251) as u8).collect();
+        let event_lengths = [3, 2_046, 5, 4_097, 1_849];
+        assert_eq!(event_lengths.iter().sum::<usize>(), source.len());
+
+        let mut reframer = PlaybackReframer::default();
+        let mut frames = Vec::new();
+        let mut offset = 0;
+        for event_length in event_lengths {
+            frames.extend(reframer.push(&source[offset..offset + event_length]));
+            assert!(frames
+                .iter()
+                .all(|frame| frame.len() == DEVICE_AUDIO_CHUNK_BYTES));
+            offset += event_length;
+        }
+        if let Some(final_frame) = reframer.finish().unwrap() {
+            frames.push(final_frame);
+        }
+
+        assert!(frames[..frames.len() - 1]
+            .iter()
+            .all(|frame| frame.len() == DEVICE_AUDIO_CHUNK_BYTES));
+        assert!(frames.last().unwrap().len() < DEVICE_AUDIO_CHUNK_BYTES);
+        assert_eq!(frames.iter().flatten().copied().collect::<Vec<_>>(), source);
+    }
+
+    #[test]
+    fn playback_reframer_emits_no_empty_terminal_frame_for_exact_multiple() {
+        let mut reframer = PlaybackReframer::default();
+        let source = vec![0x55; DEVICE_AUDIO_CHUNK_BYTES * 2];
+        let frames = reframer.push(&source);
+        assert_eq!(
+            frames.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![DEVICE_AUDIO_CHUNK_BYTES, DEVICE_AUDIO_CHUNK_BYTES]
+        );
+        assert_eq!(reframer.finish().unwrap(), None);
+    }
+
+    #[test]
+    fn playback_reframer_rejects_an_incomplete_terminal_sample() {
+        let mut reframer = PlaybackReframer::default();
+        assert!(reframer.push(&[1, 2, 3]).is_empty());
+        assert_eq!(
+            reframer.finish(),
+            Err("TTS ended with an incomplete PCM sample")
+        );
+    }
+
+    #[test]
+    fn output_audio_budget_is_exact_across_irregular_provider_chunks() {
+        let maximum_samples = AUDIO_SAMPLE_RATE;
+        let mut total = 0;
+        for chunk_bytes in [2_051, 29_949] {
+            total = checked_output_audio_total(total, chunk_bytes, maximum_samples).unwrap();
+        }
+        assert_eq!(total, u64::from(AUDIO_SAMPLE_RATE) * 2);
+        assert_eq!(
+            checked_output_audio_total(total, 2, maximum_samples),
+            Err("TTS audio exceeds the configured turn limit")
+        );
+        assert!(checked_output_audio_total(u64::MAX, 2, maximum_samples).is_err());
+    }
+
+    #[test]
+    fn durable_usage_budget_resets_only_after_a_full_window() {
+        let existing = UsageBudget {
+            version: USAGE_BUDGET_VERSION,
+            window_started_unix_ms: 1_000,
+            message_count: 99,
+            turn_attempt_count: 7,
+            audio_bytes: 12_345,
+        };
+        assert_eq!(
+            usage_budget_for_time(existing.clone(), 1_000 + USAGE_WINDOW_MS - 1).unwrap(),
+            existing
+        );
+        assert_eq!(
+            usage_budget_for_time(existing.clone(), 999).unwrap(),
+            existing
+        );
+        assert_eq!(
+            usage_budget_for_time(existing, 1_000 + USAGE_WINDOW_MS).unwrap(),
+            fresh_usage_budget(1_000 + USAGE_WINDOW_MS)
+        );
+    }
+
+    #[test]
+    fn durable_usage_budget_rejects_unknown_or_zero_epoch_state() {
+        for budget in [
+            UsageBudget {
+                version: USAGE_BUDGET_VERSION + 1,
+                window_started_unix_ms: 1,
+                message_count: 0,
+                turn_attempt_count: 0,
+                audio_bytes: 0,
+            },
+            UsageBudget {
+                version: USAGE_BUDGET_VERSION,
+                window_started_unix_ms: 0,
+                message_count: 0,
+                turn_attempt_count: 0,
+                audio_bytes: 0,
+            },
+        ] {
+            assert!(usage_budget_for_time(budget, 10).is_err());
+        }
+    }
+
+    #[test]
+    fn durable_usage_budget_is_exhausted_at_each_exact_limit() {
+        let base = UsageBudget {
+            version: USAGE_BUDGET_VERSION,
+            window_started_unix_ms: 1,
+            message_count: 9,
+            turn_attempt_count: 4,
+            audio_bytes: 99,
+        };
+        assert!(!usage_budget_reached_limits(&base, (10, 5, 100)));
+        for exhausted in [
+            UsageBudget {
+                message_count: 10,
+                ..base.clone()
+            },
+            UsageBudget {
+                turn_attempt_count: 5,
+                ..base.clone()
+            },
+            UsageBudget {
+                audio_bytes: 100,
+                ..base.clone()
+            },
+        ] {
+            assert!(usage_budget_reached_limits(&exhausted, (10, 5, 100)));
+        }
     }
 }

@@ -6,9 +6,14 @@
     "check": "cargo check",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "test": "cargo test"
+    "test": "npm run test:rust && npm run test:runtime",
+    "test:rust": "cargo test --locked",
+    "test:runtime": "npm run build && vitest run --max-workers=1 --no-isolate"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "@cloudflare/vitest-pool-workers": "0.18.4",
+    "@cloudflare/workers-types": "5.20260711.1",
+    "vitest": "4.1.10",
+    "wrangler": "4.110.0"
   }
 }

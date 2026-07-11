@@ -1,0 +1,43 @@
+name = "ha-voice-hermes-gateway-test"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-07-11"
+compatibility_flags = ["no_websocket_standard_binary_type"]
+workers_dev = false
+preview_urls = false
+
+[[durable_objects.bindings]]
+name = "VOICE_SESSIONS"
+class_name = "VoiceSession"
+
+[[migrations]]
+tag = "realtime-v2"
+new_sqlite_classes = ["VoiceSession"]
+
+[vars]
+DEVICE_TOKENS_JSON = '{"voice-pe-test":"test-device-token-0123456789abcdef0123456789abcdef"}'
+HERMES_SESSION_KEYS_JSON = '{"voice-pe-test":"agent:test:voice:device:voice-pe-test"}'
+ELEVENLABS_API_KEY = "test-elevenlabs-api-key"
+ELEVENLABS_VOICE_ID = "test-voice-id"
+HERMES_BASE_URL = "https://hermes.example.com"
+HERMES_API_KEY = "test-hermes-api-key"
+# Synthetic values only: production deploys the secret half with
+# `wrangler secret put CF_ACCESS_CLIENT_SECRET`.
+CF_ACCESS_CLIENT_ID = "test-access-client-id"
+CF_ACCESS_CLIENT_SECRET = "test-access-client-secret"
+HERMES_BINDING_REVISION = "test-profile-v1"
+HERMES_PROFILE_ID = "test-voice-safe"
+STT_PROVIDER = "elevenlabs"
+REALTIME_STT_MODEL = "scribe_v2_realtime"
+TTS_MODEL = "eleven_flash_v2_5"
+HERMES_MODEL = "hermes-agent"
+CONVERSATION_IDLE_SECONDS = "900"
+MAX_AUDIO_BYTES = "1048576"
+MAX_AUDIO_SECONDS = "30"
+REALTIME_MAX_AUDIO_SECONDS = "30"
+REALTIME_MAX_OUTPUT_SECONDS = "1"
+MAX_HERMES_RESPONSE_BYTES = "262144"
+MAX_CONNECTION_AUDIO_SECONDS = "120"
+MAX_TURNS_PER_CONNECTION = "16"
+MAX_MESSAGES_PER_CONNECTION = "1024"
+DIAGNOSTIC_V1_ENABLED = "false"
+ELEVENLABS_ENABLE_LOGGING = "true"

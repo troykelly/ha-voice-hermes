@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Secret history
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - name: Scan reachable Git history
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  gateway:
+    name: Gateway and Worker runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: gateway/package-lock.json
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Keep credential bindings out of Wrangler variables
+        run: |
+          for secret in \
+            DEVICE_TOKENS_JSON HERMES_SESSION_KEYS_JSON DEVICE_AUTH_TOKEN \
+            ELEVENLABS_API_KEY STT_API_KEY HERMES_API_KEY CF_ACCESS_CLIENT_SECRET; do
+            if grep -Eq "^[[:space:]]*${secret}[[:space:]]*=" wrangler.toml; then
+              echo "Credential binding ${secret} must be deployed with wrangler secret put" >&2
+              exit 1
+            fi
+          done
+      - name: Verify Rust formatting
+        run: cargo fmt --check
+      - name: Run Rust tests
+        run: cargo test --locked
+      - name: Run strict Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Audit Rust dependencies
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit
+      - name: Audit JavaScript dependencies
+        run: npm audit --audit-level=high
+      - name: Install pinned Worker builder
+        run: cargo install worker-build --version 0.8.4 --locked
+      - name: Build optimized Worker
+        run: npm run build
+      - name: Test inside the Workers runtime
+        run: npx vitest run --max-workers=1 --no-isolate
+      - name: Validate Cloudflare deployment bundle
+        run: npx wrangler deploy --dry-run --outdir /tmp/wrangler-dry-run
+
+  firmware:
+    name: ESPHome factory and configured firmware
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: firmware
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install pinned ESPHome
+        run: python3 -m pip install --disable-pip-version-check "esphome==2026.6.5"
+      - name: Verify vendored wake-model integrity
+        working-directory: firmware/models
+        run: sha256sum --check SHA256SUMS
+      - name: Verify credentialed WebSocket redirects fail closed
+        run: |
+          source=idf_components/esp_websocket_client/esp_websocket_client.c
+          grep -Fqx '#define WS_TRANSPORT_REDIRECT_HEADER_SUPPORT    0' "$source"
+          grep -Fq 'else if (WS_HTTP_REDIRECT(result)) {' "$source"
+          grep -Fq 'client->error_handle.error_type = WEBSOCKET_ERROR_TYPE_HANDSHAKE;' "$source"
+          grep -Fq 'esp_websocket_client_abort_connection(client, WEBSOCKET_ERROR_TYPE_HANDSHAKE);' "$source"
+      - name: Generate isolated compile-test credentials
+        env:
+          WIFI_SSID: ci-wifi-canary-7f93d6b2
+          WIFI_PASSWORD: ci-password-canary-0c4f2281
+          HERMES_GATEWAY_URL: wss://ci-gateway-canary.invalid/v2/realtime
+        run: ../scripts/generate-device-secrets.sh secrets.yaml
+      - name: Validate factory configuration
+        run: esphome config hermes-voice-pe.factory.yaml
+      - name: Validate configured firmware
+        run: esphome config hermes-voice-pe.local.yaml
+      - name: Enforce firmware security and capture bounds
+        run: |
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          mkdir -p "$work/firmware"
+          cp -R components packages hermes-voice-pe.factory.yaml hermes-voice-pe.local.yaml secrets.yaml "$work/firmware/"
+          sed -i 's/max_recording_duration: 30s/max_recording_duration: 31s/' "$work/firmware/packages/hermes-voice-pe-base.yaml"
+          if esphome config "$work/firmware/hermes-voice-pe.factory.yaml" >"$work/config.log" 2>&1; then
+            echo "A recording duration beyond the realtime/ring bound was accepted" >&2
+            exit 1
+          fi
+          grep -Fq 'value must be at most 30s' "$work/config.log"
+          sed -i 's/max_recording_duration: 31s/max_recording_duration: 30s/' "$work/firmware/packages/hermes-voice-pe-base.yaml"
+          short_token=$(printf 'x%.0s' {1..31})
+          sed -i "s/^hermes_device_token:.*/hermes_device_token: '$short_token'/" "$work/firmware/secrets.yaml"
+          if esphome config "$work/firmware/hermes-voice-pe.local.yaml" >"$work/token.log" 2>&1; then
+            echo "A device token below the Worker minimum was accepted" >&2
+            exit 1
+          fi
+          grep -Fq 'auth_token must contain 32-512 visible ASCII bytes' "$work/token.log"
+      - name: Compile factory firmware
+        run: esphome compile hermes-voice-pe.factory.yaml
+      - name: Compile configured firmware
+        run: esphome compile hermes-voice-pe.local.yaml
+      - name: Verify the immutable WebSocket dependency in generated source
+        run: |
+          for build in \
+            .esphome/build/hermes-voice-pe-factory \
+            .esphome/build/hermes-voice-pe-local; do
+            generated=$(find "$build" -path '*/managed_components/*esp_websocket_client/esp_websocket_client.c' -print -quit)
+            test -n "$generated"
+            cmp idf_components/esp_websocket_client/esp_websocket_client.c "$generated"
+          done
+      - name: Verify TLS certificate-date enforcement
+        run: |
+          grep -Fqx 'CONFIG_MBEDTLS_HAVE_TIME_DATE=y' .esphome/build/hermes-voice-pe-factory/sdkconfig.hermes-voice-pe
+          grep -Fqx 'CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y' .esphome/build/hermes-voice-pe-factory/sdkconfig.hermes-voice-pe
+      - name: Prove factory image contains no compile-test credentials
+        run: |
+          factory_bin=$(find .esphome/build/hermes-voice-pe-factory -name firmware.bin -print -quit)
+          test -n "$factory_bin"
+          while IFS= read -r canary; do
+            if grep -aFq -- "$canary" "$factory_bin"; then
+              echo "Factory image contains a configured credential value" >&2
+              exit 1
+            fi
+          done < <(sed -n "s/^[^:]*: '\\(.*\\)'$/\\1/p" secrets.yaml)

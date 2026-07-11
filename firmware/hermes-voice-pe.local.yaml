@@ -6,6 +6,8 @@ substitutions:
   friendly_name: Hermes Voice PE
   # Empty uses the stable hardware-derived voice-pe-<wifi-mac> identity.
   device_id: ""
+  wake_word_model_manifest: models/okay_nabu.json
+  vad_model_manifest: models/vad.json
   hermes_gateway_url: !secret hermes_gateway_url
   hermes_device_token: !secret hermes_device_token
   ota_password: !secret ota_password
@@ -20,7 +22,6 @@ external_components:
     components: [hermes_voice]
 
 esphome:
-  name_add_mac_suffix: false
   build_path: build/hermes-voice-pe-local
 
 wifi:

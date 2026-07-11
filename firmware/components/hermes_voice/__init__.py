@@ -17,16 +17,24 @@ from esphome.components import (
     microphone,
     micro_wake_word,
     network,
+    ota,
     psram,
     speaker,
+    time,
     wifi,
 )
 import esphome.config_validation as cv
-from esphome.const import CONF_ID, CONF_MICROPHONE, CONF_ON_ERROR, CONF_SPEAKER
+from esphome.const import (
+    CONF_ID,
+    CONF_MICROPHONE,
+    CONF_ON_ERROR,
+    CONF_SPEAKER,
+    CONF_TIME_ID,
+)
 
 
 CODEOWNERS = []
-DEPENDENCIES = ["network", "microphone", "speaker", "psram"]
+DEPENDENCIES = ["esp32", "network", "microphone", "speaker", "psram", "time", "ota"]
 AUTO_LOAD = ["audio", "json", "ring_buffer"]
 
 CONF_GATEWAY_URL = "gateway_url"
@@ -71,11 +79,11 @@ def _auth_token(value):
     if not value:
         return value
     encoded = value.encode("utf-8")
-    if not 16 <= len(encoded) <= 512 or any(
-        byte < 0x20 or byte == 0x7F for byte in encoded
+    if not 32 <= len(encoded) <= 512 or any(
+        byte < 0x21 or byte > 0x7E for byte in encoded
     ):
         raise cv.Invalid(
-            "auth_token must contain 16-512 bytes without control characters"
+            "auth_token must contain 32-512 visible ASCII bytes"
         )
     return value
 
@@ -140,6 +148,10 @@ CONFIG_SCHEMA = cv.All(
                 max_channels=1,
             ),
             cv.Required(CONF_SPEAKER): cv.use_id(speaker.Speaker),
+            # TLS certificate validity is checked against this clock. A
+            # configured device deliberately keeps the WSS transport stopped
+            # until the clock has synchronized.
+            cv.GenerateID(CONF_TIME_ID): cv.use_id(time.RealTimeClock),
             cv.Optional(CONF_MICRO_WAKE_WORD): cv.use_id(
                 micro_wake_word.MicroWakeWord
             ),
@@ -164,7 +176,10 @@ CONFIG_SCHEMA = cv.All(
                 cv.positive_time_period_milliseconds,
                 cv.Range(
                     min=cv.TimePeriod(seconds=2),
-                    max=cv.TimePeriod(seconds=60),
+                    # ElevenLabs Scribe automatically commits a manual
+                    # realtime session at about 36 seconds. Staying at or
+                    # below 30 seconds also fits the bounded PSRAM input ring.
+                    max=cv.TimePeriod(seconds=30),
                 ),
             ),
             cv.Optional(CONF_MIN_RECORDING_DURATION, default="300ms"): cv.All(
@@ -225,6 +240,9 @@ async def to_code(config):
     output = await cg.get_variable(config[CONF_SPEAKER])
     cg.add(var.set_speaker(output))
 
+    time_source = await cg.get_variable(config[CONF_TIME_ID])
+    cg.add(var.set_time_source(time_source))
+
     if CONF_MICRO_WAKE_WORD in config:
         mww = await cg.get_variable(config[CONF_MICRO_WAKE_WORD])
         cg.add(var.set_micro_wake_word(mww))
@@ -272,8 +290,20 @@ async def to_code(config):
         if key in config:
             await automation.build_automation(trigger, args, config[key])
 
-    esp32.add_idf_component(name="espressif/esp_websocket_client", ref="1.7.0")
+    # Upstream 1.7.0 follows HTTP redirects while retaining custom headers.
+    # Pin our one-line, Apache-licensed fail-closed patch by immutable commit so
+    # the per-device bearer can never be replayed to a redirect target.
+    esp32.add_idf_component(
+        name="espressif/esp_websocket_client",
+        repo="https://github.com/troykelly/ha-voice-hermes.git",
+        ref="b37ecf245016a684fc6633d795e9e8d5bca3db94",
+        path="firmware/idf_components/esp_websocket_client",
+    )
     esp32.add_idf_sdkconfig_option("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE", True)
+    # ESP-IDF otherwise builds mbedTLS without X.509 notBefore/notAfter
+    # checks. The component gates WSS startup on the synchronized clock above.
+    esp32.add_idf_sdkconfig_option("CONFIG_MBEDTLS_HAVE_TIME_DATE", True)
+    ota.request_ota_state_listeners()
 
 
 HERMES_VOICE_ACTION_SCHEMA = cv.Schema({cv.GenerateID(): cv.use_id(HermesVoice)})

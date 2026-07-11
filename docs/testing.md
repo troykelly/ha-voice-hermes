@@ -4,10 +4,10 @@ Realtime voice crosses firmware, Wi-Fi, Cloudflare's WebSocket runtime, a Durabl
 
 ## Current validation snapshot (2026-07-11)
 
-- ESPHome 2026.6.0 validates and compiles both the zero-secret factory and configured/encrypted local variants. The factory application is 2,104,111 bytes (25.9% of its 8,126,464-byte app slot); the combined flash-from-zero binary is 2,169,792 bytes. The configured application is 2,102,395 bytes (25.9%).
-- ESPHome 2026.6.5 validates the factory configuration. The resolved factory graph has no fallback AP, captive portal or web-server OTA, and the factory/public YAML has no `!secret` dependency.
-- ESPHome's real Dashboard Import materializer produces the expected MAC-suffix-free owner YAML, package reference, Wi-Fi secret references and unique API encryption key. End-to-end validation of that generated file remains blocked until the configured immutable release tag is published.
-- Gateway results: 62 Rust tests pass; `rustfmt`, `cargo check`, and Clippy with warnings denied pass; the optimized WASM build succeeds; Wrangler 4.110.0 accepts the Worker, SQLite Durable Object migration and bindings in deployment dry-run.
+- ESPHome 2026.6.5 validates and clean-compiles both the zero-secret factory and configured/encrypted local variants. The exact final tree uses 2,102,327 bytes (25.9% of the 8,126,464-byte app slot) for factory and 2,100,791 bytes (25.9%) for configured firmware; each uses 67,396 bytes (20.6%) of RAM. Generated SDK configuration has mbedTLS certificate-time verification and SNTP enabled.
+- The resolved factory graph has no fallback AP, captive portal or web-server OTA, and the factory/public YAML has no `!secret` dependency. The configured schema rejects realtime capture limits above 30 seconds.
+- ESPHome's real Dashboard Import materializer produces adopter-owned YAML with the package reference, Wi-Fi secret references and a unique API encryption key. Anonymous end-to-end validation of the generated file remains blocked until the configured immutable release tag is published.
+- Gateway results: 84 Rust tests and 13 Vitest tests against the optimized, compiled Worker in the real Workers runtime pass. `rustfmt`, strict Clippy, `cargo audit`, `npm audit`, optimized WASM build, and Wrangler 4.110.0 deployment dry-run pass. The runtime suite covers redacted health; rejected unauthenticated/cross-device upgrades; hidden v1 diagnostics; hibernating WebSocket eviction; reset idempotency across eviction; socket replacement; durable 24-hour quota continuity and exact-limit admission/reset/ping enforcement; fail-closed credentialed redirects plus Hermes status/media-type rejection before `response.start`; a hard decoded-output PCM ceiling across irregular TTS chunks; and a complete two-turn STT → Hermes SSE → TTS exchange with conversation continuity and exact streamed PCM verification.
 - No Voice PE was attached for this run. Every physical, live-provider, proxy, OTA-authentication and long-duration fault item below remains required before a release may claim complete ESPHome compatibility or measured realtime latency.
 
 ## Automated build gates
@@ -17,10 +17,10 @@ Realtime voice crosses firmware, Wi-Fi, Cloudflare's WebSocket runtime, a Durabl
 Run the exact supported ESPHome version:
 
 ```sh
-uvx --from esphome==2026.6.0 esphome config firmware/hermes-voice-pe.factory.yaml
-uvx --from esphome==2026.6.0 esphome compile firmware/hermes-voice-pe.factory.yaml
-uvx --from esphome==2026.6.0 esphome config firmware/hermes-voice-pe.local.yaml
-uvx --from esphome==2026.6.0 esphome compile firmware/hermes-voice-pe.local.yaml
+uvx --from esphome==2026.6.5 esphome config firmware/hermes-voice-pe.factory.yaml
+uvx --from esphome==2026.6.5 esphome compile firmware/hermes-voice-pe.factory.yaml
+uvx --from esphome==2026.6.5 esphome config firmware/hermes-voice-pe.local.yaml
+uvx --from esphome==2026.6.5 esphome compile firmware/hermes-voice-pe.local.yaml
 ```
 
 This verifies schema, generated C++, ESP-IDF dependencies, linking, partitions, media codecs, and static image fit. It cannot verify XMOS levels, AEC, runtime PSRAM/heap pressure, Wi-Fi behavior, media ducking, or speaker timing.
@@ -32,7 +32,7 @@ Factory/adoption compatibility is release-blocking, not an optional future test.
 - anonymously fetch the exact tagged `dashboard_import_url` and custom-component ref; reject `@main`, missing paths, local component sources and public-package `!secret` references;
 - call ESPHome's `dashboard_import.import_config(..., encryption=True)` in an empty directory, then validate and compile the generated YAML without any gateway/Hermes setting;
 - verify empty `gateway_url` + empty token succeeds in inactive mode, a partial pair fails schema validation, a credential-free WSS URL + valid token succeeds, and normal `!secret` ESPHome output does not reveal the token;
-- compile with ESPHome 2026.6.0 and the current supported 2026.6 patch, checking both OTA-slot fit and headroom;
+- compile with the package minimum and pinned validation patch, checking both OTA-slot fit and headroom;
 - scan the factory binary for known Wi-Fi, API, OTA, Worker, Hermes, ElevenLabs and Cloudflare canary secrets;
 - flash the same binary onto at least two erased units and verify unique MAC-suffixed mDNS names plus distinct hardware-derived Hermes device IDs;
 - provision one unit through a Home Assistant Bluetooth adapter or active ESPHome Bluetooth proxy, and one through Improv Serial; both require the center-button authorization where applicable;
@@ -48,36 +48,41 @@ See [`esphome-adoption.md`](esphome-adoption.md) for the exact lifecycle and res
 Run from `gateway`:
 
 ```sh
-rustup run stable cargo fmt --check
-rustup run stable cargo test
-rustup run stable cargo check
-rustup run stable cargo clippy -- -D warnings
-worker-build --release
-npx wrangler deploy --dry-run
+cargo fmt --check
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
+cargo audit
+npm audit --audit-level=high
+npm run build
+npx vitest run --max-workers=1 --no-isolate
+npx wrangler deploy --dry-run --outdir /tmp/wrangler-dry-run
 ```
 
-Native Rust tests do not exercise Cloudflare WebSocket bindings or Durable Object hibernation. The optimized WASM build and Wrangler dry-run are therefore required in addition to unit tests.
+Native Rust tests do not exercise Cloudflare WebSocket bindings or Durable Object hibernation. The Vitest Workers-pool suite runs the compiled Worker and a routed auxiliary provider Worker inside workerd. It deliberately evicts the Durable Object while its socket is open, verifies hibernation attachment/recovery, replaces an authenticated socket without resetting the persisted 24-hour usage window, and drives two complete realtime turns through mocked outbound WebSockets and fragmented SSE. The optimized WASM build and Wrangler dry-run remain separate gates.
+
+The full-turn fixture sends irregular provider PCM event sizes, including odd-byte boundaries, and requires the gateway to emit contiguous 2,048-byte device frames plus at most one final short frame with exact sequence, `first_sample`, and byte-for-byte audio reconstruction. It also proves that mutable/final transcripts are not returned to the headless device, the second Hermes request uses the first completed response ID, and first TTS audio is produced before the terminal Hermes SSE event. A separate fixture returns an STT `302` and verifies no request—or `xi-api-key`—reaches the redirect target. Credentialed Worker requests use workerd-supported manual redirect mode and then explicitly require the expected `101`, success, or exact recovery status; every `3xx` is rejected without following `Location`.
 
 At minimum, automated tests must cover:
 
-- device ID and constant-time token authentication;
+- device ID, minimum token length, unique per-device credentials, hashed constant-time authentication, established-socket revocation, and explicit shared-token opt-in;
 - routing a validated `/v2/realtime` upgrade to the device-named `VOICE_SESSIONS` object;
 - exact WebSocket subprotocol negotiation;
 - the 20-byte frame codec, network-order integers, PCM little-endian payload, and both directions;
 - sequence and `first_sample` monotonicity;
 - end-hint flag handling, fatal discontinuity, and rejection of reserved flag bits;
-- odd, empty, oversized, wrong-kind, stale-turn, and truncated audio frames;
+- odd, empty, oversized, wrong-kind, stale-turn, short-nonterminal, post-short, and truncated audio frames;
 - 32-frame ACK windows, coalesced cumulative ACKs, and queue overflow cancellation;
 - control direction, required fields, turn ordering, duplicate IDs, cancel, ping/pong, `conversation.reset`/`.done`, and control-size limits;
 - fragmented/multiline Responses SSE parsing with event and total-byte limits;
 - `response.created`, `response.output_text.delta`, tool items, `response.completed`, `response.failed`, and absence of a `[DONE]` requirement;
 - conversation promotion only for terminal `status: completed`;
-- persisted conversation UUID/Hermes-binding/session metadata, explicit reset request-ID idempotency, reset/turn exclusion, accepted-turn idle activity, binding-change fencing, opt-in idle bounds, and legacy-head migration;
-- crash journal reconciliation for completed, incomplete, failed, missing, and malformed stored responses;
+- persisted conversation UUID, digest-only Hermes binding metadata (never the raw session key or binding fields), returned session metadata, explicit reset request-ID idempotency, reset/turn exclusion, accepted-turn idle activity, binding-change fencing, opt-in idle bounds, and legacy-head migration;
+- mirrored per-socket and durable per-device message, turn, and captured-audio quotas, including 24-hour-window continuity across socket replacement;
+- deterministic Hermes idempotency keys and crash-journal reconciliation that promotes completed responses but fails closed on starting, incomplete, missing, and malformed states;
 - phrase segmentation across arbitrary Unicode/token boundaries, cross-phrase fenced-code/split-backtick suppression, and same-phrase Markdown-link/bare-URL cleanup;
 - ElevenLabs Scribe messages, manual commit with either the coalescer's pending PCM or an empty audio field, multi-context initialization, flush, final, and close-context cancellation;
 - base64 provider limits and 2,048-byte PCM downlink reframing;
-- buffered v1 WAV validation, alternate STT multipart fields, complete Hermes extraction, and streaming HTTP TTS.
+- disabled-by-default v1 routing, stateless/non-stored diagnostic Hermes requests, isolated hashed memory scopes, WAV validation, alternate STT multipart fields, complete Hermes extraction, and streaming HTTP TTS.
 
 ## Local Cloudflare smoke tests
 
@@ -101,7 +106,7 @@ Verify:
 
 ## Provider contract tests
 
-Use restricted test keys/quotas and a non-privileged Hermes profile.
+Use restricted test keys/quotas and a non-privileged Hermes profile. The automated provider Worker uses only synthetic canary credentials, transcripts, response IDs, and PCM. Live-provider validation must use non-sensitive utterances unless the test environment is explicitly approved for PII. Speech formatting cleanup is not DLP and must never be credited with preventing Hermes from speaking an ordinary text secret or other sensitive value.
 
 ### Scribe Realtime
 
@@ -115,15 +120,16 @@ Use restricted test keys/quotas and a non-privileged Hermes profile.
 
 ### Hermes Responses SSE
 
-- Verify the request includes `stream: true`, `store: true`, the committed transcript, spoken-answer instructions, and the configured `X-Hermes-Session-Key` (default `voice:<device-id>`).
+- Verify the request includes `stream: true`, `store: true`, the committed transcript, spoken-answer instructions, deterministic `Idempotency-Key`, and the device's explicitly configured `X-Hermes-Session-Key`.
 - First turn must omit `previous_response_id`; a subsequent turn must use the last completed ID.
 - Confirm `conversation` is absent.
-- Verify Hermes receives the configured `HERMES_SESSION_KEYS_JSON` value for a mapped device, the fallback for an unmapped device, and the same value before and after explicit/idle conversation rotation.
+- Verify configuration fails if `HERMES_SESSION_KEYS_JSON` does not cover every `DEVICE_TOKENS_JSON` device. Separately test the deliberate `ALLOW_IMPLICIT_HERMES_CONTEXT=true` compatibility path and its `voice:<device-id>` value.
 - Capture `X-Hermes-Session-Id` from the successful response headers and verify it is persisted only with a completed safe head; continuation still uses `previous_response_id`.
 - Use a fixture where turn B refers to text and a harmless tool result from turn A. Prove B receives both through the stored response chain without the gateway resending history.
 - Split SSE fields at every possible network boundary, include comment keepalives, and verify incremental parsing.
 - Speak only `response.output_text.delta.delta`. Never speak `function_call`, `function_call_output`, status, arguments, or result content.
 - Do not wait for `[DONE]`; require `response.completed` or `response.failed`.
+- Run `scripts/verify-hermes-contract.py` against audited commit `5ecc07986f46463ca3096679b03a46402eb19cee` for chaining, retrieval, exact missing-response errors, and cleanup. Separately re-audit the streaming source path and record that it does not apply the non-streaming idempotency cache; the contract script deliberately does not duplicate a potentially tool-using request.
 
 Conversation safety scenarios are release blockers:
 
@@ -132,7 +138,7 @@ Conversation safety scenarios are release blockers:
 | A completes, then B completes | B |
 | A completes, then B emits text and fails | A |
 | A completes, then B is cancelled/disconnected | A |
-| A completes, then object restarts with B journaled as `incomplete` | A |
+| A completes, then object restarts with B journaled as `incomplete` | A retained; `conversation_ambiguous`; block new turns until explicit reset |
 | A completes, then object restarts and GET reports B `completed` | B |
 | First turn fails before any completion | no `previous_response_id` |
 | Reconnect, device reboot, ordinary wake, or short button start after A | A; same conversation UUID |
@@ -141,13 +147,17 @@ Conversation safety scenarios are release blockers:
 | Duplicate delivery of request R | same reset UUID; do not rotate again |
 | Distinct reset request S after R | another new UUID; no previous ID |
 | Reset requested while turn/reset active | `conversation_busy`; no state change |
-| Idle setting omitted/`0`/`off`/`none` | never rotate for inactivity |
+| Idle setting omitted | use 900-second boundary |
+| Idle setting `0`/`off`/`none` without explicit unbounded flag | configuration failure |
+| Idle setting `0`/`off`/`none` with `ALLOW_UNBOUNDED_CONVERSATION=true` | never rotate for inactivity |
 | Idle threshold not yet reached | retain head and UUID |
 | Idle threshold exactly reached before next turn | rotate before the turn; omit previous ID |
 | Failed or cancelled accepted turn before the threshold | refresh activity at `turn.start`; retain head and UUID |
 | Long successful turn completes after its start | refresh activity again at completion |
-| Hermes base URL, model/route, or resolved session key changes | rotate before the next turn; never send the old previous ID |
-| Stored A is missing and Hermes returns 404 | fail current turn without replay; rotate UUID/head; next newly spoken turn has no previous ID |
+| Hermes base URL, model/route, profile ID, binding revision, or resolved session key changes | rotate before the next turn; never send the old previous ID |
+| Hermes returns exact structured missing-previous error naming stored A | fail current turn without replay; rotate UUID/head; next newly spoken turn has no previous ID |
+| Hermes returns generic/unrelated 404 | `hermes_failed`; retain A and UUID |
+| Request was accepted but no in-flight ID was durably observed | `conversation_ambiguous`; retain A but block new turns until explicit reset |
 
 Use a harmless fixture tool that records invocation IDs. Prove that an ambiguous turn is not automatically retried. A tool may have run even when the response head remains A.
 
@@ -156,8 +166,8 @@ Also prove conversation-boundary recovery:
 1. Persist an in-flight B candidate for conversation UUID 1, then explicitly reset to UUID 2 before reconciliation. Recovery must not promote B into UUID 2 even if GET later reports B completed.
 2. Persist a reset result but drop `conversation.reset.done`; reconnect and resend the same request ID. The acknowledgement must return UUID 2, not UUID 3.
 3. Complete A and record Hermes response session ID H. A normal reply must remain in UUID 1 and advance the response head; explicit reset must clear H with A while preserving the long-term-memory key.
-4. Configure idle values `59`, `31536001`, and malformed text and require health/configuration failure; accept `60` and `31536000`.
-5. Persist a completed head with binding `(origin A, model A, session key A)`. Change each binding field independently and verify a new UUID/head before the next turn. Change only the API bearer at origin A and verify it does not expose the secret in storage or logs and does not by itself rotate.
+4. Configure idle values `59`, `31536001`, and malformed text and require health/configuration failure; accept `60`, `900`, and `31536000`. Require the explicit unbounded flag with every off spelling.
+5. Persist a completed head with binding `(origin A, model A, profile A, revision A, session key A)`. Change each binding field independently and verify a new UUID/head before the next turn. Change only the API bearer at origin A and verify it does not expose the secret in storage or logs and does not by itself rotate.
 6. Migrate a legacy state with no binding: the first current configuration must bind in place without discarding its valid completed head; only a later mismatch rotates.
 
 ### Multi-context TTS
@@ -173,13 +183,13 @@ Also prove conversation-boundary recovery:
 
 ## Buffered v1 diagnostic-route test
 
-The diagnostic route is tested separately and must never be counted as realtime success:
+The diagnostic route is tested separately and must never be counted as realtime success. First verify it returns generic `404` with `DIAGNOSTIC_V1_ENABLED=false`; enable it only in an isolated test configuration:
 
 ```sh
 ffmpeg -i spoken-command.wav -ar 16000 -ac 1 -c:a pcm_s16le utterance.wav
 
 curl --fail-with-body \
-  -H "Authorization: Bearer $DEVICE_AUTH_TOKEN" \
+  -H "Authorization: Bearer $KITCHEN_DEVICE_TOKEN" \
   -H "X-Device-Id: voice-pe-a1b2c3d4e5f6" \
   -H "Content-Type: audio/wav" \
   --data-binary @utterance.wav \
@@ -189,7 +199,7 @@ curl --fail-with-body \
 ffplay -f s16le -ar 16000 -ac 1 reply.pcm
 ```
 
-This isolates provider, Tunnel, Access, and Hermes configuration from realtime framing. It buffers the utterance and complete Hermes answer by design. Verify its Hermes request uses `conversation: "voice-buffered-<device-id>"` and no realtime `previous_response_id`; a buffered turn must not change the Durable Object's `ready.conversation_id` or next realtime head. This route is diagnostic-only and must not be used as a conversational continuity test.
+This isolates provider, Tunnel, Access, and Hermes configuration from realtime framing. It buffers the utterance and complete Hermes answer by design. Verify its Hermes request uses `store: false`, no `conversation`, no `previous_response_id`, and a hashed `diagnostic:<sha256>` memory scope. Repeating it must not form a Responses chain or change the Durable Object's `ready.conversation_id`/next realtime head. Disable the route again after the test.
 
 ## Latency instrumentation
 
@@ -269,7 +279,7 @@ Initial release targets on stable Wi-Fi, using a short no-tool English fixture, 
 | Cancel request → old reply inaudible | p95 ≤ 250 ms |
 | Network restored → authenticated `ready` | p95 ≤ 5 s |
 
-If a chosen Hermes model or Australian provider route cannot meet the no-tool end-to-end target, publish measured results and adjust the target explicitly; do not relabel buffered playback as realtime.
+If a chosen Hermes model or provider route cannot meet the no-tool end-to-end target, publish measured results and adjust the target explicitly; do not relabel buffered playback as realtime.
 
 ## Required physical Voice PE validation
 
@@ -332,11 +342,11 @@ Inject each fault before commit, after commit, after `response.created`, during 
 - Worker deployment/restart and device reconnection;
 - Durable Object re-instantiation with an in-flight journal;
 - Scribe/TTS 401, 429, provider-capacity errors, malformed JSON/base64, oversized events, and socket close;
-- Hermes 401, 404 previous response, malformed SSE, missing terminal event, `response.failed`, and stall;
+- Hermes 401, exact missing-previous-response error, unrelated/generic 404, malformed SSE, missing terminal event, `response.failed`, and stall;
 - duplicate/gapped/out-of-order sequence, wrong `first_sample`, discontinuity, reserved flags, and stale turn IDs;
 - full input/output windows and deliberately withheld ACKs;
 - rapid buttons, mute changes, wake during playback, and maximum-duration speech;
-- dropped/reset acknowledgements, duplicate reset request IDs, accepted failed/cancelled-turn activity, idle-expiry boundary, binding changes, and stale previous-response `404`.
+- dropped/reset acknowledgements, duplicate reset request IDs, accepted failed/cancelled-turn activity, default/disabled idle boundaries, binding changes, exact previous-response expiry, and ambiguous restart states.
 
 After every fault, assert bounded memory, no automatic ambiguous replay, no promotion of an incomplete Hermes response, old-turn audio suppression, and eventual return to `ready` or a controlled reconnect.
 
@@ -345,10 +355,11 @@ After every fault, assert bounded memory, no automatic ambiguous replay, no prom
 - A committed transcript is required before Hermes starts; speculative tool execution from partial STT is intentionally forbidden.
 - Hermes tool time can dominate end-to-end latency.
 - `/v1/responses` does not provide the Runs API's interactive approval exchange.
+- Audited Hermes commit `5ecc079` does not apply its idempotency cache to streaming Responses; ambiguous post-acceptance turns require explicit conversation reset.
 - Aborting SSE is best effort and cannot undo completed tool side effects.
 - Output ACK means consumed from the Hermes receive ring into its fixed local staging buffer, not accepted by the downstream speaker or physically played by the DAC.
 - Acoustic barge-in remains conditional on physical XMOS/AEC results.
 - The buffered v1 diagnostic route is not realtime and is never an automatic retry.
-- Buffered v1 has a separate named chain and is deprecated for conversational use; switching transports does not preserve immediate context.
-- Automatic conversation expiry is off by default; deployments enabling it own the timeout policy.
+- Buffered v1 is disabled by default, stateless, non-stored, and memory-isolated; it has no conversational continuity.
+- Automatic conversation expiry defaults to 900 seconds. Disabling it requires an explicit unbounded-conversation flag.
 - Gateway URL and device bearer are compile-time firmware settings in the current release.

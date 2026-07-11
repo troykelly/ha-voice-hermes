@@ -10,7 +10,6 @@ use crate::text::extract_hermes_response;
 
 const MAX_TRANSCRIPT_BYTES: usize = 64 * 1024;
 const MAX_STT_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-const VOICE_INSTRUCTIONS: &str = "Give a concise, natural spoken answer suitable for text-to-speech. Do not use Markdown, code blocks, tables, or raw URLs unless the user explicitly requests them.";
 
 pub async fn transcribe(config: &Config, wav: &[u8]) -> ApiResult<String> {
     let endpoint = match config.stt_provider {
@@ -25,6 +24,14 @@ pub async fn transcribe(config: &Config, wav: &[u8]) -> ApiResult<String> {
     if config.stt_provider == SttProvider::ElevenLabs {
         fields.push(("tag_audio_events", "false"));
         fields.push(("diarize", "false"));
+        fields.push((
+            "enable_logging",
+            if config.elevenlabs_enable_logging {
+                "true"
+            } else {
+                "false"
+            },
+        ));
     }
     if let Some(language_code) = config.stt_language_code.as_deref() {
         fields.push((stt_language_field(config.stt_provider), language_code));
@@ -66,16 +73,14 @@ pub async fn transcribe(config: &Config, wav: &[u8]) -> ApiResult<String> {
 
 pub async fn ask_hermes(config: &Config, device_id: &str, transcript: &str) -> ApiResult<String> {
     let endpoint = api_endpoint(&config.hermes_base_url, "responses");
-    // Buffered v1 is a diagnostic compatibility path with its own completed,
-    // non-streaming named chain. It must never collide with realtime v2's
-    // Durable-Object-owned response pointer.
-    let conversation = format!("voice-buffered-{device_id}");
+    // Buffered v1 is a disabled-by-default diagnostic path. Keep it stateless
+    // and non-stored so concurrent diagnostics cannot race a named chain and
+    // can never collide with realtime v2's Durable-Object-owned response head.
     let body = json!({
         "model": config.hermes_model,
         "input": transcript,
-        "instructions": VOICE_INSTRUCTIONS,
-        "conversation": conversation,
-        "store": true
+        "instructions": config.hermes_voice_instructions,
+        "store": false
     });
 
     let headers = Headers::new();
@@ -94,7 +99,7 @@ pub async fn ask_hermes(config: &Config, device_id: &str, transcript: &str) -> A
     headers
         .set(
             "X-Hermes-Session-Key",
-            &config.hermes_session_key(device_id),
+            &config.diagnostic_hermes_session_key(device_id),
         )
         .map_err(|_| ApiError::internal())?;
     if let (Some(client_id), Some(client_secret)) = (
@@ -119,11 +124,12 @@ pub async fn ask_hermes(config: &Config, device_id: &str, transcript: &str) -> A
 }
 pub async fn synthesize(config: &Config, spoken_text: &str) -> ApiResult<Response> {
     let endpoint = format!(
-        "{}?output_format=pcm_16000",
+        "{}?output_format=pcm_16000&enable_logging={}",
         api_endpoint(
             &config.elevenlabs_base_url,
             &format!("text-to-speech/{}/stream", config.elevenlabs_voice_id)
-        )
+        ),
+        config.elevenlabs_enable_logging
     );
     let body = serde_json::to_string(&json!({
         "text": spoken_text,
@@ -201,7 +207,10 @@ async fn send_request(
         .with_headers(headers)
         // Provider requests carry API keys and Access credentials. Never let
         // a 30x replay custom secret headers to a different origin.
-        .with_redirect(RequestRedirect::Error)
+        // Workers does not implement redirect="error". Manual returns the
+        // 30x response without following it; the status check below rejects
+        // it before credentials can be replayed to Location.
+        .with_redirect(RequestRedirect::Manual)
         .with_body(Some(body));
     let request = Request::new_with_init(endpoint, &init).map_err(|_| ApiError::configuration())?;
     let response = Fetch::Request(request)
@@ -333,8 +342,8 @@ mod tests {
 
     #[test]
     fn voice_instructions_are_speech_specific() {
-        assert!(VOICE_INSTRUCTIONS.contains("natural spoken answer"));
-        assert!(VOICE_INSTRUCTIONS.contains("Do not use Markdown"));
-        assert!(VOICE_INSTRUCTIONS.contains("raw URLs"));
+        assert!(crate::config::DEFAULT_VOICE_INSTRUCTIONS.contains("natural spoken answer"));
+        assert!(crate::config::DEFAULT_VOICE_INSTRUCTIONS.contains("Do not use Markdown"));
+        assert!(crate::config::DEFAULT_VOICE_INSTRUCTIONS.contains("raw URLs"));
     }
 }

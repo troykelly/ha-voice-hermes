@@ -15,7 +15,7 @@ use worker::{event, Context, Env, Method, Request, Response, Result as WorkerRes
 
 use config::{valid_device_id, Config};
 use error::{ApiError, ApiResult};
-use text::prepare_for_tts;
+use text::prepare_for_tts_strict;
 use wav::{validate_wav, WavError};
 
 #[derive(Serialize)]
@@ -58,7 +58,10 @@ async fn dispatch(mut request: Request, env: &Env) -> ApiResult<Response> {
         (Method::Get, "/v2/realtime") => realtime::upgrade(request, env).await,
         (Method::Post, "/v1/voice") => voice(&mut request, env).await,
         (_, "/health") => method_not_allowed("GET"),
-        (_, "/v1/voice") => method_not_allowed("POST"),
+        (_, "/v1/voice") => match Config::from_env(env) {
+            Ok(config) if config.diagnostic_v1_enabled => method_not_allowed("POST"),
+            _ => Err(ApiError::new(404, "not_found", "Route not found")),
+        },
         (_, "/v2/realtime") => method_not_allowed("GET"),
         _ => Err(ApiError::new(404, "not_found", "Route not found")),
     }
@@ -92,6 +95,9 @@ fn health(env: &Env) -> ApiResult<Response> {
 
 async fn voice(request: &mut Request, env: &Env) -> ApiResult<Response> {
     let config = Config::from_env(env)?;
+    if !config.diagnostic_v1_enabled {
+        return Err(ApiError::new(404, "not_found", "Route not found"));
+    }
     require_wav_content_type(request)?;
 
     let device_id = request
@@ -112,10 +118,8 @@ async fn voice(request: &mut Request, env: &Env) -> ApiResult<Response> {
 
     let transcript = providers::transcribe(&config, &wav).await?;
     let hermes_response = providers::ask_hermes(&config, &device_id, &transcript).await?;
-    let spoken_text = prepare_for_tts(&hermes_response);
-    if spoken_text.is_empty() {
-        return Err(ApiError::upstream("hermes"));
-    }
+    let spoken_text =
+        prepare_for_tts_strict(&hermes_response).ok_or_else(|| ApiError::upstream("hermes"))?;
     providers::synthesize(&config, &spoken_text).await
 }
 

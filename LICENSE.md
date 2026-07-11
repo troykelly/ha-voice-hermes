@@ -10,8 +10,15 @@ The complete applicable license texts are included in this repository:
 
 - [`LICENSES/GPL-3.0-only.txt`](LICENSES/GPL-3.0-only.txt)
 - [`LICENSES/MIT.txt`](LICENSES/MIT.txt)
+- [`LICENSES/Apache-2.0.txt`](LICENSES/Apache-2.0.txt), for the vendored
+  microWakeWord model artifacts described in
+  [`firmware/models/NOTICE.md`](firmware/models/NOTICE.md) and the patched
+  Espressif WebSocket component with its own bundled notice/license.
 
 Unless a more specific notice is present, MIT-licensed repository material is
 copyright 2026 the ha-voice-hermes contributors.
 
-External components, wake-word models, XMOS firmware, ESPHome itself, Hermes, and hosted services retain their own licenses and terms. In particular, distributed ESPHome firmware must satisfy the GPL source-availability obligations for the linked C++ runtime and this component.
+External components, XMOS firmware, ESPHome itself, Hermes, and hosted services
+retain their own licenses and terms. In particular, distributed ESPHome
+firmware must satisfy the GPL source-availability obligations for the linked
+C++ runtime and this component.
