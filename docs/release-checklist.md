@@ -46,6 +46,16 @@ gates below pass.
 
 ## Manual release-artifact gates
 
+- **Open legal-distribution gate (12 July 2026):** the current App image's
+  project MIT and Apache files are not a complete third-party notice bundle.
+  The locked WASM runtime includes Unicode-3.0 components and `matchit 0.7.3`
+  (`MIT AND BSD-3-Clause`, including its httprouter notice). The Home Assistant
+  base also contributes non-dpkg Bashio and s6-overlay/skarnet components whose
+  notices are not currently copied into the project bundle. Generate and
+  review the exact locked runtime/container inventory, include every required
+  verbatim copyright/license notice in the repository and image, and add a CI
+  regeneration/diff gate before publishing. Do not infer completeness from the
+  two generic license texts or the vulnerability SBOM.
 - Review the CI-generated SBOM for each architecture and archive one for each
   exact published digest.
 - Re-run the image CVE/secret scan against the exact release digests and resolve

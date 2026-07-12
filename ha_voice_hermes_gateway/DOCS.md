@@ -74,6 +74,14 @@ repository. Home Assistant requires an App repository to carry
 at its root, while each App lives in its own directory, so a second repository
 is not required.
 
+**These installation steps are not available yet.** As of 12 July 2026 the App
+exists only on draft PR
+[#1](https://github.com/troykelly/ha-voice-hermes/pull/1): `main` has no App
+metadata, no signed `app-v0.1.0` tag has published the image, and the GHCR
+package is unavailable. Continue only after that PR is reviewed and merged,
+the signed release workflow succeeds, and the package passes its anonymous
+public-pull check.
+
 1. In Home Assistant, open **Settings → Apps → App store**.
 2. Open the repository menu, add
    `https://github.com/troykelly/ha-voice-hermes`, and refresh the store.
@@ -81,9 +89,10 @@ is not required.
 4. Do not start it until TLS, Hermes, ElevenLabs, and at least one device entry
    are configured.
 
-The repository must be published at an immutable, reviewed revision before it
-is offered as a production install source. Installing a branch is suitable for
-development only.
+The configured `image:` makes Supervisor installation depend on the published
+GHCR image; adding a development branch to the App store is not a local-build
+workaround. A source checkout can run the documented Docker smoke tests, but a
+Home Assistant installation remains gated on the immutable published image.
 
 ### Maintainer publication
 

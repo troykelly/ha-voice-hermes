@@ -96,6 +96,13 @@ Choose this path when the gateway should be self-hosted with Home Assistant. The
 same repository is a valid [Home Assistant App repository](https://developers.home-assistant.io/docs/apps/repository/),
 so a second repository is not required:
 
+**This path is not installable yet.** As of 12 July 2026 the App is on draft PR
+[#1](https://github.com/troykelly/ha-voice-hermes/pull/1), not `main`; no signed
+`app-v0.1.0` tag or public GHCR image exists. Use the steps below only after the
+reviewed merge, signed multi-architecture publish, and anonymous image-pull
+gate succeed. The App's `image:` setting means adding a development branch to
+the store cannot substitute for that published image.
+
 1. Open **Settings → Apps → App store**, add
    `https://github.com/troykelly/ha-voice-hermes` as a repository, and install
    **Home Assistant Voice Hermes Gateway**.

@@ -41,6 +41,13 @@ Home Assistant is not required in the voice path. The firmware retains the Voice
 
 ## Quick start
 
+> **Current App availability (12 July 2026):** the App source is on draft PR
+> [#1](https://github.com/troykelly/ha-voice-hermes/pull/1), not on `main`.
+> There is no `app-v0.1.0` tag or public GHCR image yet, so Home Assistant
+> cannot install it today. The App path below becomes actionable only after the
+> reviewed merge, signed release tag, successful multi-architecture publish,
+> and anonymous package-visibility check.
+
 1. Install the audited Hermes Agent commit [`5ecc079`](https://github.com/NousResearch/hermes-agent/tree/5ecc07986f46463ca3096679b03a46402eb19cee), or another exact commit/image digest you have re-audited; enable its authenticated API server and run `scripts/verify-hermes-contract.py` against it.
 2. Choose a gateway deployment: expose only loopback Hermes through Cloudflare Tunnel/Access and deploy [`gateway`](gateway), or install the same-repository [Home Assistant App](ha_voice_hermes_gateway/DOCS.md) with publicly trusted `/ssl/fullchain.pem` and `/ssl/privkey.pem` plus an HTTPS Hermes origin. Private origins require explicit `allow_private_upstreams: true`.
 3. Configure a unique device token and explicit Hermes memory scope for every Voice PE in the chosen gateway.
@@ -109,4 +116,4 @@ Another documented stretch goal allows phrases such as **“Hey Avery”** and *
 
 ## Validation status
 
-The firmware and gateway compile; 85 Rust tests and 14 tests against the optimized, compiled Worker in workerd pass. Runtime coverage includes Durable Object hibernation/replacement, immediate durable-quota admission and side-effect gates, strict fail-closed provider redirects/status/media types, a hard decoded-output ceiling across irregular TTS chunks, and a byte-exact two-turn mocked Scribe → Hermes SSE → ElevenLabs TTS streaming conversation. The Home Assistant App adds packaging, TLS/configuration, certificate-reload, and local-persistence tests, but no physical Voice PE, Home Assistant OS target, or live Hermes/ElevenLabs credentials were available for the recorded run. Physical adoption/OTA, App install/backup/restore, AEC/barge-in, impaired-Wi-Fi, playback, live-provider continuity, PII/DLP policy validation, and measured latency remain release gates; the repository deliberately has no release tag until they pass. See [`docs/testing.md`](docs/testing.md).
+The firmware and gateway compile; 86 Rust tests and 14 tests against the optimized, compiled Worker in workerd pass. Runtime coverage includes Durable Object hibernation/replacement, immediate durable-quota admission and side-effect gates, strict fail-closed provider redirects/status/media types, a hard decoded-output ceiling across irregular TTS chunks, and a byte-exact two-turn mocked Scribe → Hermes SSE → ElevenLabs TTS streaming conversation. The Home Assistant App adds packaging, TLS/configuration, certificate-reload, and local-persistence tests, but no physical Voice PE, Home Assistant OS target, or live Hermes/ElevenLabs credentials were available for the recorded run. Physical adoption/OTA, App install/backup/restore, AEC/barge-in, impaired-Wi-Fi, playback, live-provider continuity, PII/DLP policy validation, and measured latency remain release gates; the repository deliberately has no release tag until they pass. See [`docs/testing.md`](docs/testing.md).

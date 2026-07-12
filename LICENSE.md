@@ -5,6 +5,9 @@ This repository follows ESPHome's split licensing model:
 - `firmware/**/*.cpp` and `firmware/**/*.h`: **GPL-3.0-only**.
 - firmware Python/YAML, documentation, and repository metadata: **MIT**.
 - `gateway/`: **MIT**, as declared in `gateway/Cargo.toml`.
+- `ha_voice_hermes_gateway/` source and packaging authored by this project:
+  **MIT**, except for bundled third-party artifacts and notices identified in
+  that directory.
 
 The complete applicable license texts are included in this repository:
 
