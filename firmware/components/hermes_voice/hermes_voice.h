@@ -285,6 +285,9 @@ class HermesVoice : public Component
   size_t inbound_message_size_{0};
   uint8_t inbound_message_opcode_{0};
   bool inbound_message_active_{false};
+  size_t inbound_frame_size_{0};
+  size_t inbound_frame_offset_{0};
+  uint8_t inbound_frame_opcode_{0};
   uint64_t output_validation_turn_id_{0};
   uint32_t expected_output_sequence_{0};
   uint32_t expected_output_sample_{0};

@@ -1,13 +1,21 @@
 # Verification and test plan
 
-Realtime voice crosses firmware, Wi-Fi, Cloudflare's WebSocket runtime, a Durable Object, three remote streams, and physical audio. A successful compile or one spoken reply is not enough to claim that it is fully streaming or low latency.
+Realtime voice crosses firmware, Wi-Fi, a Cloudflare or local `workerd` runtime,
+a Durable Object, three remote streams, and physical audio. A successful compile
+or one spoken reply is not enough to claim that it is fully streaming or low
+latency.
 
-## Current validation snapshot (2026-07-11)
+## Current validation snapshot (2026-07-12)
 
-- ESPHome 2026.6.5 validates and clean-compiles both the zero-secret factory and configured/encrypted local variants. The exact final tree uses 2,102,327 bytes (25.9% of the 8,126,464-byte app slot) for factory and 2,100,791 bytes (25.9%) for configured firmware; each uses 67,396 bytes (20.6%) of RAM. Generated SDK configuration has mbedTLS certificate-time verification and SNTP enabled.
+- ESPHome 2026.6.5 validates and clean-compiles both the zero-secret factory and configured/encrypted local variants. The exact final tree uses 2,102,659 bytes (25.9% of the 8,126,464-byte app slot) for factory and 2,101,163 bytes (25.9%) for configured firmware; each uses 67,404 bytes (20.6%) of RAM. Generated SDK configuration has mbedTLS certificate-time verification and SNTP enabled.
 - The resolved factory graph has no fallback AP, captive portal or web-server OTA, and the factory/public YAML has no `!secret` dependency. The configured schema rejects realtime capture limits above 30 seconds.
 - ESPHome's real Dashboard Import materializer produces adopter-owned YAML with the package reference, Wi-Fi secret references and a unique API encryption key. Anonymous end-to-end validation of the generated file remains blocked until the configured immutable release tag is published.
-- Gateway results: 84 Rust tests and 13 Vitest tests against the optimized, compiled Worker in the real Workers runtime pass. `rustfmt`, strict Clippy, `cargo audit`, `npm audit`, optimized WASM build, and Wrangler 4.110.0 deployment dry-run pass. The runtime suite covers redacted health; rejected unauthenticated/cross-device upgrades; hidden v1 diagnostics; hibernating WebSocket eviction; reset idempotency across eviction; socket replacement; durable 24-hour quota continuity and exact-limit admission/reset/ping enforcement; fail-closed credentialed redirects plus Hermes status/media-type rejection before `response.start`; a hard decoded-output PCM ceiling across irregular TTS chunks; and a complete two-turn STT → Hermes SSE → TTS exchange with conversation continuity and exact streamed PCM verification.
+- Gateway results: 85 Rust tests and 14 Vitest tests against the optimized, compiled Worker in the real Workers runtime pass. `rustfmt`, strict Clippy, `cargo audit`, `npm audit`, optimized WASM build, and Wrangler 4.110.0 deployment dry-run pass. The runtime suite covers redacted health; rejected unauthenticated/cross-device upgrades; hidden v1 diagnostics; hibernating WebSocket eviction; reset idempotency across eviction; socket replacement; durable 24-hour quota continuity and exact-limit admission/reset/ping enforcement; fail-closed credentialed redirects plus Hermes status/media-type rejection before `response.start`; a hard decoded-output PCM ceiling across irregular TTS chunks; and a complete two-turn STT → Hermes SSE → TTS exchange with conversation continuity and exact streamed PCM verification.
+- The Home Assistant App is an additional experimental packaging/runtime target.
+  Its automated configuration, TLS, artifact, certificate-watch and local-disk
+  tests are separate from physical validation. No Home Assistant OS install,
+  App cold-backup/restore, real certificate renewal, or physical Voice PE through
+  the App was available for this snapshot.
 - No Voice PE was attached for this run. Every physical, live-provider, proxy, OTA-authentication and long-duration fault item below remains required before a release may claim complete ESPHome compatibility or measured realtime latency.
 
 ## Automated build gates
@@ -83,6 +91,65 @@ At minimum, automated tests must cover:
 - ElevenLabs Scribe messages, manual commit with either the coalescer's pending PCM or an empty audio field, multi-context initialization, flush, final, and close-context cancellation;
 - base64 provider limits and 2,048-byte PCM downlink reframing;
 - disabled-by-default v1 routing, stateless/non-stored diagnostic Hermes requests, isolated hashed memory scopes, WAV validation, alternate STT multipart fields, complete Hermes extraction, and streaming HTTP TTS.
+
+### Home Assistant App
+
+The local App must reuse the optimized Worker artifacts; it must not acquire a
+second gateway implementation. Automated release gates must:
+
+- validate `repository.yaml`, App `config.yaml`, translations, documentation,
+  custom AppArmor, `amd64`/`aarch64` architecture declarations, cold backup,
+  read-only `/ssl`, published port 8443, and the absence of ingress, host
+  networking, Home Assistant/Supervisor APIs, audio, devices and privileges;
+- prove the embedded JS/WASM hashes match a fresh optimized gateway build and
+  that the exact `workerd` package/version/integrity is locked rather than
+  floating;
+- build both architecture images from pinned bases/dependencies and scan the
+  image, build log, layers, package lock, process arguments/environment, normal
+  logs and persistent workerd state for canary Hermes, ElevenLabs, Access,
+  device-token and session-scope values;
+- validate every option and hard bound, paired Access fields, non-empty and
+  unique per-device IDs/tokens, explicit session-map coverage, HTTPS-only Hermes,
+  private-network denial by default, the explicit `allow_private_upstreams`
+  path, and unconditional denial of loopback/workerd-local destinations;
+- reject absolute/traversing certificate paths, symlink escape, missing/empty
+  chain/key files, malformed PEM, chains outside the App's public CA bundle, and
+  server certificate/key mismatch;
+- prove the standard `/ssl/fullchain.pem` and `/ssl/privkey.pem` happy path,
+  direct TLS health, exact WSS subprotocol/authentication, publicly trusted
+  outbound Hermes TLS, fail-closed redirects, and redacted configuration errors;
+- require the generated workerd config and containing tmpfs generation directory
+  to be mode-restricted to the dedicated runtime account, then deleted after
+  readiness, with secrets absent from exported environment, process arguments,
+  application logs and persistent local-disk state;
+- prove that invalid changed options stop the active runtime so old credentials
+  cannot linger, while an invalid/incomplete certificate-file renewal retains
+  the active validated certificate only when the normalized options are exactly
+  unchanged; a simultaneous option and TLS failure must stop;
+- restart workerd only after an atomic certificate/key change, load the new
+  chain after the required two identical validated polls plus the startup
+  budget, reconnect the device socket, and retain an idle conversation head
+  across that restart;
+- exercise an in-flight certificate restart after Hermes acceptance and require
+  the existing ambiguous-turn safety behavior rather than automatic replay;
+- prove local-disk Durable Object state, completed-response head, reset
+  idempotency and 24-hour quotas survive process/App restart; and
+- take a cold backup, restore it to an isolated instance, verify state integrity,
+  then prove the documented source/clone credential rotation and no-concurrent-
+  clone rule. Do not attempt to import Cloudflare's opaque Durable Object data.
+
+CI now generates an SPDX JSON SBOM and runs a pinned Trivy image vulnerability
+and secret scan for each native architecture build, failing on fixed
+high/critical findings. Release publication must still archive/review the SBOM,
+re-scan the exact published digests against the then-current advisory database,
+produce a dependency/license inventory, and inspect final layers/manifests.
+
+Because Home Assistant's secure `password` schema triggers Supervisor's
+k-anonymous pwned check, documentation/PII tests must also verify disclosure of
+the locally computed SHA-1 prefix behavior: only the first five hexadecimal
+characters go to `api.pwnedpasswords.com`, not the clear value or full hash.
+Debug-log tests must assume resolved options are sensitive and reject credential
+text in any shareable output.
 
 ## Local Cloudflare smoke tests
 
@@ -284,6 +351,55 @@ If a chosen Hermes model or provider route cannot meet the no-tool end-to-end ta
 ## Required physical Voice PE validation
 
 No release may claim “fully streaming,” “barge-in,” or production readiness until these pass on an actual unit.
+
+### Home Assistant App installation
+
+On real supported Home Assistant OS `amd64` and `aarch64` targets:
+
+1. Add the public repository from a clean App store, install/build the App, and
+   verify protection remains enabled and the declared AppArmor profile loads.
+2. Configure a public-CA chain/key at `/ssl/fullchain.pem` and
+   `/ssl/privkey.pem`. From an actual Voice PE network, verify DNS, SAN, complete
+   chain, certificate time, WSS upgrade/authentication, and `/healthz` on the
+   mapped port.
+3. Renew the certificate atomically while devices are idle. Require the new
+   certificate after two identical validated poll snapshots plus startup,
+   bounded reconnect, unchanged idle
+   conversation UUID/head, and no credential/transcript logging. Repeat during
+   a harmless in-flight turn and confirm ambiguous recovery never replays it.
+4. Test a public Hermes origin with private upstream access disabled. Then test
+   an isolated private HTTPS Hermes hostname with explicit private access and a
+   publicly trusted DNS-01 certificate. Confirm loopback remains denied and
+   disabling the option removes private-range egress. With the option enabled,
+   verify and record that the expansion applies to all gateway fetches and
+   WebSockets, not only Hermes.
+5. Run the complete streaming proof below through the App with live restricted
+   Hermes/ElevenLabs accounts. Record the same p50/p95/p99 device-side latency
+   and do not infer parity from Cloudflare/workerd unit tests.
+6. While Hermes voice is active, play Home Assistant music and announcements
+   over the encrypted Native API. Verify mixing/ducking and confirm the App uses
+   no Home Assistant ingress/API/audio path.
+7. Take an encrypted cold backup including the App and `ssl`, save its emergency
+   kit off-device, destroy the test installation, and restore it. Verify local
+   conversation/reset/quota state and provider readiness before reconnecting the
+   device.
+8. Restore a second isolated clone. Before any device access, change its DNS/TLS
+   identity and rotate Hermes, ElevenLabs, Access, device tokens and test session
+   scopes; prove the source and clone cannot both accept the same production
+   identity. Exercise a Cloudflare-to-local cutover and require a visibly new
+   short-term conversation.
+9. Keep 8443 on an isolated LAN/VPN and prove firewall rules reject an untrusted
+   segment. If a reverse proxy is used, verify WSS upgrades and streaming through
+   it, then exercise handshake rate, concurrent-connection, and idle-connection
+   limits without interrupting valid long-lived audio sessions.
+10. Stop the App, rotate canary provider/device secrets while stopped, restart,
+    and prove only the new values work. Separately inject an invalid live option
+    and require the App to stop rather than keep old credentials active; inject
+    an incomplete certificate-only renewal with unchanged options and require
+    the active validated certificate to remain until valid files stabilize.
+
+Until this matrix is recorded, the App remains experimental and documentation
+must say that Home Assistant OS and physical Voice PE validation are outstanding.
 
 ### Microphone and endpointing
 

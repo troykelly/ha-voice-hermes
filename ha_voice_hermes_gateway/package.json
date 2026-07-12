@@ -1,0 +1,10 @@
+{
+  "name": "ha-voice-hermes-home-assistant-app-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pinned workerd build dependency for the Home Assistant app",
+  "license": "MIT AND Apache-2.0",
+  "dependencies": {
+    "workerd": "1.20260708.1"
+  }
+}

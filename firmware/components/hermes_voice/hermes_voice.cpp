@@ -161,11 +161,12 @@ static bool copy_conversation_id(const char *value, char *output, size_t output_
   if (value == nullptr || output == nullptr || output_size == 0)
     return false;
   const size_t length = strlen(value);
-  if (length == 0 || length >= output_size)
+  if (length == 0 || length > 64 || length >= output_size)
     return false;
   for (size_t i = 0; i < length; i++) {
     const auto byte = static_cast<uint8_t>(value[i]);
-    if (byte < 0x21 || byte > 0x7E)
+    if (!((byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
+          byte == '.' || byte == '_' || byte == '-'))
       return false;
   }
   memcpy(output, value, length + 1);
@@ -1094,6 +1095,9 @@ void HermesVoice::reset_inbound_message_() {
   this->inbound_message_size_ = 0;
   this->inbound_message_opcode_ = 0;
   this->inbound_message_active_ = false;
+  this->inbound_frame_size_ = 0;
+  this->inbound_frame_offset_ = 0;
+  this->inbound_frame_opcode_ = 0;
 }
 
 void HermesVoice::handle_websocket_data_(const esp_websocket_event_data_t *event) {
@@ -1105,37 +1109,57 @@ void HermesVoice::handle_websocket_data_(const esp_websocket_event_data_t *event
     return;
   }
 
-  if ((opcode == WS_OPCODE_TEXT || opcode == WS_OPCODE_BINARY) && event->payload_offset == 0) {
-    if (this->inbound_message_active_) {
-      this->protocol_error_.store(true, std::memory_order_release);
-      this->reset_inbound_message_();
-    }
-    this->inbound_message_active_ = true;
-    this->inbound_message_opcode_ = opcode;
-  } else if (opcode == WS_OPCODE_CONTINUATION) {
-    if (!this->inbound_message_active_) {
+  const size_t data_len = static_cast<size_t>(event->data_len);
+  const size_t payload_len = static_cast<size_t>(event->payload_len);
+  const size_t payload_offset = static_cast<size_t>(event->payload_offset);
+  if (payload_offset == 0) {
+    if (opcode == WS_OPCODE_TEXT || opcode == WS_OPCODE_BINARY) {
+      if (this->inbound_message_active_) {
+        this->protocol_error_.store(true, std::memory_order_release);
+        this->reset_inbound_message_();
+        return;
+      }
+      this->inbound_message_active_ = true;
+      this->inbound_message_opcode_ = opcode;
+    } else if (opcode == WS_OPCODE_CONTINUATION) {
+      if (!this->inbound_message_active_ || this->inbound_frame_size_ != 0) {
+        this->protocol_error_.store(true, std::memory_order_release);
+        this->reset_inbound_message_();
+        return;
+      }
+    } else {
       this->protocol_error_.store(true, std::memory_order_release);
       return;
     }
-  } else if (!this->inbound_message_active_) {
+    this->inbound_frame_size_ = payload_len;
+    this->inbound_frame_offset_ = 0;
+    this->inbound_frame_opcode_ = opcode;
+  } else if (!this->inbound_message_active_ || opcode != this->inbound_frame_opcode_ ||
+             payload_len != this->inbound_frame_size_ || payload_offset != this->inbound_frame_offset_) {
     this->protocol_error_.store(true, std::memory_order_release);
+    this->reset_inbound_message_();
     return;
   }
 
-  const size_t data_len = static_cast<size_t>(event->data_len);
-  if (this->inbound_message_size_ + data_len > MAX_INBOUND_MESSAGE_BYTES) {
+  if (payload_len == 0 || payload_offset > payload_len || data_len > payload_len - payload_offset ||
+      data_len > MAX_INBOUND_MESSAGE_BYTES - this->inbound_message_size_) {
     this->protocol_error_.store(true, std::memory_order_release);
     this->reset_inbound_message_();
     return;
   }
   memcpy(this->inbound_message_buffer_ + this->inbound_message_size_, event->data_ptr, data_len);
   this->inbound_message_size_ += data_len;
+  this->inbound_frame_offset_ += data_len;
 
-  const bool frame_complete = event->payload_offset + event->data_len >= event->payload_len;
+  const bool frame_complete = this->inbound_frame_offset_ == this->inbound_frame_size_;
   if (frame_complete && event->fin) {
     this->process_inbound_message_(this->inbound_message_opcode_, this->inbound_message_buffer_,
                                    this->inbound_message_size_);
     this->reset_inbound_message_();
+  } else if (frame_complete) {
+    this->inbound_frame_size_ = 0;
+    this->inbound_frame_offset_ = 0;
+    this->inbound_frame_opcode_ = 0;
   }
 }
 
@@ -1192,6 +1216,25 @@ void HermesVoice::process_control_message_(const uint8_t *data, size_t size) {
       return this->enqueue_inbound_(event);
     }
 
+    // Application pongs and future connection-scoped status controls carry no
+    // turn identifier. They are advisory and do not mutate audio/turn state.
+    if (strcmp(type, "pong") == 0) {
+      recognized = true;
+      return true;
+    }
+
+    const bool known_turn_control =
+        strcmp(type, "turn.ready") == 0 || strcmp(type, "input.ack") == 0 ||
+        strcmp(type, "transcript.final") == 0 || strcmp(type, "response.start") == 0 ||
+        strcmp(type, "tts.start") == 0 || strcmp(type, "tts.end") == 0 || strcmp(type, "turn.done") == 0 ||
+        strcmp(type, "error") == 0;
+    if (!known_turn_control) {
+      // Unknown v2 server controls are forward-compatible status messages.
+      // Ignore them without inventing a turn-id requirement.
+      recognized = true;
+      return true;
+    }
+
     const char *turn_text = root["turn_id"].as<const char *>();
     if (strcmp(type, "error") != 0 && !parse_turn_id(turn_text, event.turn_id))
       return false;
@@ -1222,16 +1265,14 @@ void HermesVoice::process_control_message_(const uint8_t *data, size_t size) {
     } else if (strcmp(type, "turn.done") == 0) {
       event.type = InboundEventType::TURN_DONE;
     } else if (strcmp(type, "error") == 0) {
+      if (!root["fatal"].isNull() && !root["fatal"].is<bool>())
+        return false;
       event.type = InboundEventType::ERROR;
       const char *code = root["code"].as<const char *>();
       const char *message = root["message"].as<const char *>();
       snprintf(event.code, sizeof(event.code), "%s", code == nullptr ? "gateway_error" : code);
       snprintf(event.message, sizeof(event.message), "%s", message == nullptr ? "Realtime gateway error" : message);
       event.fatal = root["fatal"] | false;
-    } else {
-      // Unknown v2 controls are forward-compatible and can be ignored.
-      recognized = true;
-      return true;
     }
     recognized = true;
     return this->enqueue_inbound_(event);

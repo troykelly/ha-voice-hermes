@@ -35,6 +35,8 @@ WebSocket **text** messages are UTF-8 JSON controls. WebSocket **binary** messag
 
 Malformed JSON, binary frames shorter than 20 bytes, and unsupported required protocol fields are protocol errors. The gateway rejects unknown client control types. A device may ignore an otherwise valid, unknown server status control so optional telemetry can be added compatibly; it must not infer audio or turn state from it. The gateway sends an `error` control when possible, then cancels the current turn or closes the socket when `fatal` is true.
 
+RFC 6455 message fragmentation and transport-library receive chunking do not change the application contract. Each receiver bounds the complete reassembled message and verifies every transport chunk's declared frame length and exact offset before appending it. A gap, overlap, changed frame length/opcode, unexpected continuation, or new data frame before the prior fragmented message finishes is a protocol error. Application `pong` and future connection-scoped status controls do not require a `turn_id` and do not mutate turn state.
+
 Connection budgets are cumulative across hibernation: by default one socket may carry 16,384 application messages, 256 turn attempts, and 900 seconds of microphone PCM. Exceeding a budget sends fatal `queue_overflow` and closes the socket. Reaching any exact durable limit rejects the next upgrade with HTTP `429` until the 24-hour window rolls over. Reset and ping messages are durably charged before reset storage or a pong response, so reconnecting cannot bypass the accounting boundary. Reconnecting is not a replay instruction and does not relax either 30-second per-turn audio maximum.
 
 ### Binary audio frame

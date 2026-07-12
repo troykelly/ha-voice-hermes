@@ -6,11 +6,12 @@ sensitive even when they do not contain an obvious name or account number.
 
 ## Data path
 
-1. Voice PE sends PCM and protocol metadata only to the authenticated Worker.
+1. Voice PE sends PCM and protocol metadata only to the authenticated gateway,
+   either the Cloudflare Worker or the same WASM in the Home Assistant App.
 2. The per-device Durable Object forwards PCM to the configured STT provider.
 3. Only a committed transcript is sent to the selected Hermes profile.
 4. Speakable Hermes text is sent to the configured TTS provider and returned as
-   PCM. Structured tool payloads are neither spoken nor logged by the Worker.
+   PCM. Structured tool payloads are neither spoken nor logged by the gateway.
 5. Home Assistant's optional Native API/media path does not receive Hermes
    microphone audio, transcripts or provider credentials.
 
@@ -21,6 +22,10 @@ intentionally persist audio, transcripts, spoken text, raw binding/session-key
 values or tool payloads. Hermes stores the full response chain, including tool
 history, and its configured memory provider may store additional derived
 memory.
+
+In the Home Assistant App, the Durable Object metadata is local-disk state under
+its backed-up `/data` volume. In Cloudflare it is managed Durable Object storage;
+the stores are independent and are not safely copied between backends.
 
 The binding digest is data minimization, not encryption: predictable profile,
 room or session-scope labels may still be susceptible to offline guessing by
@@ -108,3 +113,71 @@ pointer, and a hashed diagnostic memory scope isolated from realtime. That
 prevents a short-term Responses chain; it does not override Hermes memory-plugin
 behavior or provider retention contracts. Use synthetic speech and a restricted
 profile for diagnostics, then disable the route again.
+
+## Home Assistant App option and backup boundary
+
+The local App requests no ingress, Home Assistant/Supervisor API, host network,
+audio, device, privileged capability, or writable Home Assistant configuration
+mount. It reads TLS files from the standard read-only `/ssl` map and serves only
+the WSS/health port. Optional Home Assistant music and announcements stay on the
+independent encrypted ESPHome Native API media path; Home Assistant Core does not
+receive Hermes audio, transcripts, response state, or provider credentials.
+
+Keep that published port on a firewalled LAN or VPN, or behind a
+WebSocket-aware reverse proxy with connection and handshake rate limits. The
+off-by-default `allow_private_upstreams` option expands **all** gateway egress to
+private ranges, not only Hermes; loopback/workerd-local destinations remain
+denied. A private Hermes origin must still use publicly trusted TLS because the
+App has no custom Hermes CA option.
+
+Supervisor does receive the local deployment's Hermes, ElevenLabs, optional
+Access and per-device options. The App uses Home Assistant's recommended
+`password` schema type for credential fields, but that masks form display only.
+Supervisor resolves `!secret` references and gives the App clear values in
+`/data/options.json`; cold App backups include those values with the local
+conversation metadata. The launcher safely snapshots and validates the source
+options/TLS files, hands a mode-restricted tmpfs generation to the dedicated
+unprivileged `gateway` account, and deletes it after readiness. It never
+intentionally puts a credential into a process argument, exported environment,
+or log. Supervisor itself [logs a requested `!secret` name](https://github.com/home-assistant/supervisor/blob/1e81816c855310f3217b7f5113573b1b661d4f4d/supervisor/homeassistant/secrets.py#L24-L32)
+at info level, so avoid person/room-identifying secret names if those logs may be
+shared.
+
+The same options file and backup also contain the stable hardware-derived
+`voice-pe-<Wi-Fi-MAC>` device ID plus unmasked Hermes model/profile/revision
+labels. Those values are operational identifiers and can reveal device linkage
+or room/person naming even though the bearer and session fields are masked in
+the form. Use neutral profile/revision/session labels where practical and redact
+device IDs and labels from shared diagnostics.
+
+Current July 2026 Supervisor also performs a throttled pwned-password check for
+every non-empty App option typed `password`: it computes SHA-1 locally and sends
+only the first five hexadecimal characters to the Pwned Passwords range API.
+Neither the clear value nor full hash is sent, but the remote service observes a
+k-anonymous prefix, request time, and source IP. This also covers random API and
+device tokens because the secure UI schema masks them as passwords. See the
+pinned Supervisor [hash collection](https://github.com/home-assistant/supervisor/blob/1e81816c855310f3217b7f5113573b1b661d4f4d/supervisor/apps/options.py#L150-L153),
+[daily App check](https://github.com/home-assistant/supervisor/blob/1e81816c855310f3217b7f5113573b1b661d4f4d/supervisor/resolution/checks/app_pwned.py#L31-L52),
+and [k-anonymous request](https://github.com/home-assistant/supervisor/blob/1e81816c855310f3217b7f5113573b1b661d4f4d/supervisor/utils/pwned.py#L10-L29).
+
+Use encrypted backups, keep the matching [backup emergency kit](https://www.home-assistant.io/more-info/backup-emergency-kit/)
+off-device, and inspect/redact exports before sharing. Avoid Supervisor DEBUG
+logging during credential work and conservatively treat debug logs/diagnostics
+as capable of containing resolved options. Never run a restored clone beside
+its source with the same hostname/tokens: rotate Hermes, ElevenLabs, Access,
+device tokens and lab session scopes first. A Cloudflare-to-local or
+local-to-Cloudflare cutover begins a new short-term conversation; the explicitly
+reused Hermes session key may preserve intended long-term memory but does not
+migrate the completed response chain.
+
+For emergency secret rotation, stop the App before changing options, save the
+replacement values while it is stopped, then start it and verify readiness. An
+invalid changed option stops the runtime rather than leaving old credentials
+active. Only an invalid certificate-file renewal may retain the active validated
+certificate, and only when all normalized options are unchanged.
+
+A compromised TLS private key follows the same stop-first rule: stop the App,
+replace both key and chain, revoke the old certificate, then restart and verify
+the externally served fingerprint. The routine-renewal exception marks App
+health degraded and stops at active-certificate expiry or after its bounded
+grace period; it is not an emergency key-revocation mechanism.

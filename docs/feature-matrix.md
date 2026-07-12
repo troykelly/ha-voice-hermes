@@ -10,6 +10,7 @@ upstream Voice PE firmware. The table below is the release contract.
 | On-device wake word | Retained | Wake detection remains local and starts a Hermes turn. |
 | Physical mute, center button, volume dial and LED ring | Retained | Includes conversation reset, cancellation, volume and factory-reset gestures. |
 | Realtime Hermes capture and playback | Replaced | Uses the authenticated v2 WebSocket protocol, ElevenLabs STT/TTS and Hermes Responses API. |
+| Realtime barge-in | Retained, bounded | A wake word during response playback cancels the old turn and starts a new turn with bounded buffered capture; an energy fallback exists only when no wake-word component is configured. Cancellation cannot roll back a tool side effect that already happened. |
 | ESPHome Improv BLE/Serial, Native API, OTA and safe mode | Retained | Factory adoption follows the official Voice PE resource lifecycle. |
 | Home Assistant music and announcements | Retained, basic | Separate bounded HTTP-FLAC media and announcement inputs feed the shared mixer. They do not carry Hermes transcripts or credentials. |
 | Home Assistant voice-assistant pipeline | Removed | Hermes owns conversational turns; Home Assistant is optional for management and media. |

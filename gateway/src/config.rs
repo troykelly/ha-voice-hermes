@@ -158,6 +158,9 @@ impl Config {
         };
 
         let elevenlabs_api_key = required_secret(env, "ELEVENLABS_API_KEY")?;
+        if !valid_header_value(&elevenlabs_api_key, 4_096) {
+            return Err(ApiError::configuration());
+        }
         let elevenlabs_base_url = normalize_base_url(
             &optional_var(env, "ELEVENLABS_BASE_URL")
                 .unwrap_or_else(|| DEFAULT_ELEVENLABS_BASE_URL.to_string()),
@@ -179,6 +182,9 @@ impl Config {
                 required_secret(env, "STT_API_KEY")?,
             ),
         };
+        if !valid_header_value(&stt_api_key, 4_096) {
+            return Err(ApiError::configuration());
+        }
 
         validate_identifier(&stt_model, 160)?;
         let realtime_stt_model = optional_var(env, "REALTIME_STT_MODEL")
@@ -259,6 +265,9 @@ impl Config {
 
         let hermes_base_url = normalize_base_url(&required_var(env, "HERMES_BASE_URL")?)?;
         let hermes_api_key = required_secret(env, "HERMES_API_KEY")?;
+        if !valid_header_value(&hermes_api_key, 4_096) {
+            return Err(ApiError::configuration());
+        }
         let hermes_model =
             optional_var(env, "HERMES_MODEL").unwrap_or_else(|| "hermes-agent".to_string());
         validate_identifier(&hermes_model, 160)?;
@@ -289,6 +298,13 @@ impl Config {
         let cf_access_client_id = optional_secret(env, "CF_ACCESS_CLIENT_ID");
         let cf_access_client_secret = optional_secret(env, "CF_ACCESS_CLIENT_SECRET");
         if cf_access_client_id.is_some() != cf_access_client_secret.is_some() {
+            return Err(ApiError::configuration());
+        }
+        if cf_access_client_id
+            .iter()
+            .chain(cf_access_client_secret.iter())
+            .any(|value| !valid_header_value(value, 4_096))
+        {
             return Err(ApiError::configuration());
         }
 
@@ -594,11 +610,14 @@ fn valid_device_token(token: &str) -> bool {
         && token.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
 }
 
-fn valid_hermes_session_key(value: &str) -> bool {
+fn valid_header_value(value: &str, maximum_bytes: usize) -> bool {
     !value.is_empty()
-        && value == value.trim()
-        && value.len() <= 256
-        && !value.bytes().any(|byte| byte.is_ascii_control())
+        && value.len() <= maximum_bytes
+        && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+}
+
+fn valid_hermes_session_key(value: &str) -> bool {
+    valid_header_value(value, 256)
 }
 
 #[cfg(test)]
@@ -635,6 +654,18 @@ mod tests {
         assert!(constant_time_token_eq("same-token", "same-token"));
         assert!(!constant_time_token_eq("same-token", "same-tokeN"));
         assert!(!constant_time_token_eq("short", "much-longer"));
+    }
+
+    #[test]
+    fn header_bound_credentials_require_visible_ascii() {
+        assert!(valid_header_value("agent:main/room-kitchen", 256));
+        assert!(valid_header_value("token_with_symbols-._~+/=", 256));
+        assert!(!valid_header_value("", 256));
+        assert!(!valid_header_value("contains space", 256));
+        assert!(!valid_header_value("emoji-😀", 256));
+        assert!(!valid_header_value("latin-ÿ", 256));
+        assert!(!valid_header_value("line\nbreak", 256));
+        assert!(!valid_header_value(&"x".repeat(257), 256));
     }
 
     #[test]
@@ -740,6 +771,8 @@ mod tests {
         assert!(!valid_hermes_session_key(" room:kitchen"));
         assert!(!valid_hermes_session_key("room:kitchen "));
         assert!(!valid_hermes_session_key("room\nother"));
+        assert!(!valid_hermes_session_key("room kitchen"));
+        assert!(!valid_hermes_session_key("room:厨房"));
         assert!(!valid_hermes_session_key(&"x".repeat(257)));
     }
 

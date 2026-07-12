@@ -296,6 +296,8 @@ Deploy Hermes with a voice-safe tool allowlist/sandbox and an approval policy th
 
 Every upstream base URL is HTTPS. Credentialed fetches use workerd-supported manual redirect handling and explicitly accept only the expected WebSocket/success/recovery statuses; every `3xx` is rejected without following `Location`. Errors returned to the device exclude upstream bodies/transcripts, and CORS is disabled. Per-device tokens prevent a device from selecting another device's Durable Object or conversation head. Per-socket limits are mirrored into a durable per-device 24-hour usage budget so reconnects cannot cheaply reset authenticated abuse accounting.
 
+The executable Hermes contract probe applies the same fail-closed origin assumptions: it refuses non-HTTPS URLs, embedded URL credentials, queries/fragments, header-unsafe credentials/session keys, redirects, oversized or incorrectly typed JSON, malformed/oversized SSE, missing or mismatched response IDs, non-completed terminal events, incorrect text deltas, response-session drift, and non-contract missing-head errors. It deletes the responses it creates on a best-effort basis.
+
 `store: true` intentionally persists the committed transcript, assistant response, and tool history in Hermes' local Responses store so `previous_response_id` works; protect the Hermes home directory and backups accordingly. The Worker/Durable Object does not archive PCM or text. ElevenLabs processing/retention follows the account contract and `enable_logging` setting; the gateway does not claim zero-retention mode by default.
 
 Wake words and replayed audio are not authentication. Financial, destructive, security-sensitive, or externally visible Hermes tools need a policy stronger than possession of a Voice PE token.

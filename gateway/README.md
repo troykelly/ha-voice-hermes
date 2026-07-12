@@ -170,7 +170,7 @@ npx vitest run --max-workers=1 --no-isolate
 npx wrangler deploy --dry-run --outdir /tmp/wrangler-dry-run
 ```
 
-The recorded 2026-07-11 result is 84 passing Rust tests and 13 passing tests against the optimized, compiled Worker in workerd. The runtime suite includes a complete two-turn mocked Scribe WebSocket → fragmented Hermes SSE → multi-context ElevenLabs TTS WebSocket exchange; odd provider PCM event-boundary reframing and byte-exact device audio; `previous_response_id` continuity; transcript non-disclosure to the device; TTS-before-Hermes-terminal streaming; fail-closed redirects and Hermes status/media-type validation; Durable Object eviction; reset idempotency; socket replacement; exact durable-quota enforcement before reset/ping side effects; and the aggregate decoded-output ceiling. This synthetic coverage does not replace live-provider or physical Voice PE testing.
+The recorded 2026-07-12 result is 85 passing Rust tests and 14 passing tests against the optimized, compiled Worker in workerd. The runtime suite includes a complete two-turn mocked Scribe WebSocket → fragmented Hermes SSE → multi-context ElevenLabs TTS WebSocket exchange; odd provider PCM event-boundary reframing and byte-exact device audio; `previous_response_id` continuity; transcript non-disclosure to the device; TTS-before-Hermes-terminal streaming; fail-closed redirects and Hermes status/media-type validation; Durable Object eviction; reset idempotency; socket replacement; exact durable-quota enforcement before reset/ping side effects; and the aggregate decoded-output ceiling. This synthetic coverage does not replace live-provider or physical Voice PE testing.
 
 For local runtime testing:
 

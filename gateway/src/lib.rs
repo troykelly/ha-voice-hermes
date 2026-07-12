@@ -28,6 +28,11 @@ struct HealthResponse<'a> {
     realtime: bool,
 }
 
+#[derive(Serialize)]
+struct ReadinessResponse<'a> {
+    status: &'a str,
+}
+
 #[event(fetch)]
 pub async fn main(request: Request, env: Env, _context: Context) -> WorkerResult<Response> {
     let result = dispatch(request, &env).await;
@@ -55,9 +60,11 @@ async fn dispatch(mut request: Request, env: &Env) -> ApiResult<Response> {
     let path = request.path();
     match (request.method(), path.as_str()) {
         (Method::Get, "/health") => health(env),
+        (Method::Get, "/healthz") => readiness(env),
         (Method::Get, "/v2/realtime") => realtime::upgrade(request, env).await,
         (Method::Post, "/v1/voice") => voice(&mut request, env).await,
         (_, "/health") => method_not_allowed("GET"),
+        (_, "/healthz") => method_not_allowed("GET"),
         (_, "/v1/voice") => match Config::from_env(env) {
             Ok(config) if config.diagnostic_v1_enabled => method_not_allowed("POST"),
             _ => Err(ApiError::new(404, "not_found", "Route not found")),
@@ -67,12 +74,27 @@ async fn dispatch(mut request: Request, env: &Env) -> ApiResult<Response> {
     }
 }
 
-fn health(env: &Env) -> ApiResult<Response> {
-    match Config::from_env(env).and_then(|config| {
+fn configured_runtime(env: &Env) -> ApiResult<Config> {
+    Config::from_env(env).and_then(|config| {
         env.durable_object("VOICE_SESSIONS")
             .map(|_| config)
             .map_err(|_| ApiError::configuration())
-    }) {
+    })
+}
+
+fn readiness(env: &Env) -> ApiResult<Response> {
+    let (status, code) = if configured_runtime(env).is_ok() {
+        ("ok", 200)
+    } else {
+        ("unavailable", 503)
+    };
+    Response::from_json(&ReadinessResponse { status })
+        .map(|response| response.with_status(code))
+        .map_err(|_| ApiError::internal())
+}
+
+fn health(env: &Env) -> ApiResult<Response> {
+    match configured_runtime(env) {
         Ok(config) => Response::from_json(&HealthResponse {
             status: "ok",
             service: "ha-voice-hermes-gateway",

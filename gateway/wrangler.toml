@@ -18,7 +18,7 @@ tag = "realtime-v2"
 new_sqlite_classes = ["VoiceSession"]
 
 [build]
-command = "cargo install -q worker-build --version 0.8.4 --locked && worker-build --release"
+command = "cargo install -q worker-build --version 0.8.4 --locked && ../scripts/build-gateway-worker.sh"
 
 [vars]
 STT_PROVIDER = "elevenlabs"

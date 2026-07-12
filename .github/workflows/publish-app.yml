@@ -1,0 +1,208 @@
+name: Publish Home Assistant App
+
+on:
+  push:
+    tags:
+      - "app-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-home-assistant-app
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare signed multi-architecture release
+    if: github.repository == 'troykelly/ha-voice-hermes'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      architectures: ${{ steps.metadata.outputs.architectures }}
+      image_name: ${{ steps.metadata.outputs.image_name }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      registry_prefix: ${{ steps.metadata.outputs.registry_prefix }}
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read and validate release metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          config=ha_voice_hermes_gateway/config.yaml
+          version="$(sed -n 's/^version: "\([^"]*\)"$/\1/p' "${config}")"
+          image="$(sed -n 's/^image: \(.*\)$/\1/p' "${config}")"
+          test -n "${version}"
+          test -n "${image}"
+          [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          test "${GITHUB_REF_NAME}" = "app-v${version}"
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
+          test "${image}" = "ghcr.io/troykelly/ha-voice-hermes-gateway"
+          {
+            echo "version=${version}"
+            echo "image_name=${image##*/}"
+            echo "registry_prefix=${image%/*}"
+            echo 'architectures=["aarch64","amd64"]'
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Require a GitHub-verified signed annotated tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}")"
+          test "$(jq -r '.object.type' <<<"${ref_json}")" = tag
+          tag_sha="$(jq -r '.object.sha' <<<"${ref_json}")"
+          tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}")"
+          jq -e \
+            --arg commit "${GITHUB_SHA}" \
+            '.object.type == "commit" and
+             .object.sha == $commit and
+             .verification.verified == true' \
+            <<<"${tag_json}" >/dev/null
+
+      - name: Refuse to overwrite an existing version image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_NAME: ${{ steps.metadata.outputs.image_name }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          versions="$(mktemp)"
+          errors="$(mktemp)"
+          trap 'rm -f "${versions}" "${errors}"' EXIT
+          endpoint="users/${GITHUB_REPOSITORY_OWNER}/packages/container/${IMAGE_NAME}/versions?per_page=100"
+          if gh api --paginate "${endpoint}" >"${versions}" 2>"${errors}"; then
+            if jq -s -e \
+                --arg version "${VERSION}" \
+                '[.[][] | .metadata.container.tags[]?] | index($version) != null' \
+                "${versions}" >/dev/null; then
+              echo "Refusing to overwrite existing App image version ${VERSION}. Publish a new version." >&2
+              exit 1
+            fi
+          elif ! grep -Fq 'HTTP 404' "${errors}"; then
+            echo "Could not prove that the App image version is unused; failing closed." >&2
+            sed -n '1,20p' "${errors}" >&2
+            exit 1
+          fi
+
+      - name: Prepare native runner matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@4de35182ce1e329181bffcbcc84d33db5e2c7e10 # 2026.06.0
+        with:
+          architectures: ${{ steps.metadata.outputs.architectures }}
+          image-name: ${{ steps.metadata.outputs.image_name }}
+          registry-prefix: ${{ steps.metadata.outputs.registry_prefix }}
+
+  build:
+    name: Build and sign ${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Build, publish, and keyless-sign architecture image
+        uses: home-assistant/builder/actions/build-image@4de35182ce1e329181bffcbcc84d33db5e2c7e10 # 2026.06.0
+        with:
+          arch: ${{ matrix.arch }}
+          build-args: |
+            BUILD_DESCRIPTION=Local realtime Voice Preview Edition gateway for Hermes Agent and ElevenLabs
+            BUILD_NAME=Home Assistant Voice Hermes Gateway
+            BUILD_REVISION=${{ github.sha }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          context: ./ha_voice_hermes_gateway
+          image: ${{ matrix.image }}
+          image-tags: |
+            sha-${{ github.sha }}
+          labels: |
+            io.hass.type=app
+            io.hass.name=Home Assistant Voice Hermes Gateway
+            io.hass.description=Local realtime Voice Preview Edition gateway for Hermes Agent and ElevenLabs
+            io.hass.url=https://github.com/troykelly/ha-voice-hermes
+            org.opencontainers.image.revision=${{ github.sha }}
+          push: true
+          version: ${{ needs.prepare.outputs.version }}
+
+  manifest:
+    name: Publish and sign multi-architecture manifest
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Publish and keyless-sign manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@4de35182ce1e329181bffcbcc84d33db5e2c7e10 # 2026.06.0
+        with:
+          architectures: ${{ needs.prepare.outputs.architectures }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image-name: ${{ needs.prepare.outputs.image_name }}
+          image-tags: |
+            sha-${{ github.sha }}
+          registry-prefix: ${{ needs.prepare.outputs.registry_prefix }}
+
+      - name: Promote the signed staging digest to immutable version and latest
+        env:
+          IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.image_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          staging="${IMAGE}:sha-${GITHUB_SHA}"
+          digest="$(
+            docker buildx imagetools inspect \
+              --format '{{json .Manifest}}' \
+              "${staging}" |
+              jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))'
+          )"
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION}" \
+            --tag "${IMAGE}:latest" \
+            "${IMAGE}@${digest}"
+          for tag in "${VERSION}" latest; do
+            promoted="$(
+              docker buildx imagetools inspect \
+                --format '{{json .Manifest}}' \
+                "${IMAGE}:${tag}" |
+                jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))'
+            )"
+            test "${promoted}" = "${digest}"
+          done
+
+  verify-public:
+    name: Verify anonymous installability
+    needs: [prepare, manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Pull the versioned manifest without registry credentials
+        env:
+          IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.image_name }}:${{ needs.prepare.outputs.version }}
+        run: |
+          if ! docker buildx imagetools inspect "${IMAGE}" >/dev/null; then
+            echo "The App image is not anonymously readable. A first GHCR publish may create a private package; make it public in package settings, then rerun this failed job." >&2
+            exit 1
+          fi

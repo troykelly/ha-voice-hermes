@@ -1,8 +1,12 @@
-use futures_util::StreamExt;
+use std::time::Duration;
+
+use futures_util::{future, pin_mut, StreamExt};
 use js_sys::Uint8Array;
 use serde_json::{json, Value};
 use wasm_bindgen::JsValue;
-use worker::{Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response};
+use worker::{
+    AbortController, Delay, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response,
+};
 
 use crate::config::{Config, SttProvider};
 use crate::error::{ApiError, ApiResult};
@@ -10,6 +14,8 @@ use crate::text::extract_hermes_response;
 
 const MAX_TRANSCRIPT_BYTES: usize = 64 * 1024;
 const MAX_STT_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const PROVIDER_CONNECT_TIMEOUT_SECONDS: u64 = 30;
+const PROVIDER_BODY_IDLE_TIMEOUT_SECONDS: u64 = 30;
 
 pub async fn transcribe(config: &Config, wav: &[u8]) -> ApiResult<String> {
     let endpoint = match config.stt_provider {
@@ -149,8 +155,16 @@ pub async fn synthesize(config: &Config, spoken_text: &str) -> ApiResult<Respons
         .map_err(|_| ApiError::internal())?;
 
     let mut upstream = send_json_request(&endpoint, headers, body, "tts").await?;
-    let stream = upstream.stream().map_err(|_| ApiError::upstream("tts"))?;
-    let mut response = Response::from_stream(stream).map_err(|_| ApiError::internal())?;
+    // The diagnostic endpoint used to proxy this stream without any bound.
+    // A compromised provider could therefore send arbitrary amounts of data.
+    // Buffering this disabled-by-default path lets it enforce the same output-
+    // duration contract as realtime before any audio reaches the caller.
+    let maximum_audio_bytes = maximum_pcm_bytes(config.realtime_max_output_seconds);
+    let audio = read_response_limited(&mut upstream, maximum_audio_bytes, "tts").await?;
+    if audio.is_empty() || !audio.len().is_multiple_of(2) {
+        return Err(ApiError::upstream("tts"));
+    }
+    let mut response = Response::from_bytes(audio).map_err(|_| ApiError::internal())?;
     response
         .headers_mut()
         .set(
@@ -175,6 +189,13 @@ pub async fn synthesize(config: &Config, spoken_text: &str) -> ApiResult<Respons
         .set("X-Audio-Bits-Per-Sample", "16")
         .map_err(|_| ApiError::internal())?;
     Ok(response)
+}
+
+fn maximum_pcm_bytes(maximum_seconds: u32) -> usize {
+    usize::try_from(maximum_seconds)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(16_000)
+        .saturating_mul(2)
 }
 
 async fn send_bytes_request(
@@ -213,10 +234,19 @@ async fn send_request(
         .with_redirect(RequestRedirect::Manual)
         .with_body(Some(body));
     let request = Request::new_with_init(endpoint, &init).map_err(|_| ApiError::configuration())?;
-    let response = Fetch::Request(request)
-        .send()
-        .await
-        .map_err(|_| ApiError::upstream(service))?;
+    let controller = AbortController::default();
+    let signal = controller.signal();
+    let fetch_request = Fetch::Request(request);
+    let fetch = fetch_request.send_with_signal(&signal);
+    let timeout = Delay::from(Duration::from_secs(PROVIDER_CONNECT_TIMEOUT_SECONDS));
+    pin_mut!(fetch, timeout);
+    let response = match future::select(fetch, timeout).await {
+        future::Either::Left((response, _)) => response.map_err(|_| ApiError::upstream(service))?,
+        future::Either::Right(_) => {
+            controller.abort_with_reason("provider connection timed out");
+            return Err(ApiError::upstream(service));
+        }
+    };
     if !(200..300).contains(&response.status_code()) {
         return Err(ApiError::upstream(service));
     }
@@ -243,8 +273,17 @@ async fn read_response_limited(
 
     let mut stream = response.stream().map_err(|_| ApiError::upstream(service))?;
     let mut bytes = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| ApiError::upstream(service))?;
+    loop {
+        let next = stream.next();
+        let timeout = Delay::from(Duration::from_secs(PROVIDER_BODY_IDLE_TIMEOUT_SECONDS));
+        pin_mut!(next, timeout);
+        let chunk = match future::select(next, timeout).await {
+            future::Either::Left((Some(chunk), _)) => {
+                chunk.map_err(|_| ApiError::upstream(service))?
+            }
+            future::Either::Left((None, _)) => break,
+            future::Either::Right(_) => return Err(ApiError::upstream(service)),
+        };
         if bytes.len().saturating_add(chunk.len()) > limit {
             return Err(ApiError::upstream(service));
         }
@@ -345,5 +384,11 @@ mod tests {
         assert!(crate::config::DEFAULT_VOICE_INSTRUCTIONS.contains("natural spoken answer"));
         assert!(crate::config::DEFAULT_VOICE_INSTRUCTIONS.contains("Do not use Markdown"));
         assert!(crate::config::DEFAULT_VOICE_INSTRUCTIONS.contains("raw URLs"));
+    }
+
+    #[test]
+    fn diagnostic_tts_output_uses_the_realtime_pcm_duration_bound() {
+        assert_eq!(maximum_pcm_bytes(1), 32_000);
+        assert_eq!(maximum_pcm_bytes(30), 960_000);
     }
 }

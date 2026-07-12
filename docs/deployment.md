@@ -1,6 +1,10 @@
 # Deployment
 
-This deployment keeps Hermes private, runs the realtime coordinator as a Rust/WASM Cloudflare Worker plus a SQLite-backed Durable Object, and gives each Voice PE one outbound authenticated WebSocket.
+This deployment keeps Hermes private, runs the realtime coordinator as the same
+Rust/WASM gateway either on Cloudflare or in a protected Home Assistant App, and
+gives each Voice PE one outbound authenticated WebSocket. Cloudflare provides a
+managed Durable Object; the App uses experimental single-machine local-disk
+Durable Object storage under its backed-up `/data` volume.
 
 ## 1. Prepare an audited Hermes build
 
@@ -86,7 +90,83 @@ The audited streaming branch does **not** use Hermes' non-streaming `Idempotency
 
 A device bearer authenticates hardware, not the speaker. Configure a dedicated narrow voice profile/toolset or sandbox and fail closed for dangerous actions. The Responses request cannot impose a trustworthy per-caller tool allowlist on the current Hermes server, and the selected stream has no interactive approval-response channel. Hermes' structured approval flow belongs to the Runs API, so this gateway never auto-approves a pending command. See [Hermes security and approvals](https://hermes-agent.nousresearch.com/docs/user-guide/security/).
 
-## 2. Publish Hermes through Tunnel and Access
+## 2A. Run the local Home Assistant App
+
+Choose this path when the gateway should be self-hosted with Home Assistant. The
+same repository is a valid [Home Assistant App repository](https://developers.home-assistant.io/docs/apps/repository/),
+so a second repository is not required:
+
+1. Open **Settings → Apps → App store**, add
+   `https://github.com/troykelly/ha-voice-hermes` as a repository, and install
+   **Home Assistant Voice Hermes Gateway**.
+2. Put a public-CA server chain and private key at the standard Home Assistant
+   paths `/ssl/fullchain.pem` and `/ssl/privkey.pem`. The chain's SAN must match
+   the DNS hostname in the Voice PE's WSS URL.
+3. Configure an HTTPS Hermes origin, Hermes/ElevenLabs credentials, and one
+   unique token plus explicit Hermes session scope for every hardware-derived
+   device ID. A private Hermes address additionally requires the explicit
+   `allow_private_upstreams: true` and a publicly trusted certificate for its
+   internal hostname.
+4. Save, start the App, and check
+   `https://<gateway-host>:<mapped-port>/healthz` (8443 by default).
+5. Put `wss://<certificate-SAN>:<mapped-port>/v2/realtime` and only that unit's
+   matching device token in the adopter-owned ESPHome YAML, then install it over
+   authenticated OTA.
+
+`allow_private_upstreams` is a gateway-wide egress expansion, not a Hermes-only
+exception. When enabled, every gateway fetch and WebSocket may resolve to
+private network ranges; loopback/workerd-local destinations remain denied.
+There is no custom Hermes CA option, so even a private/split-DNS Hermes hostname
+must present publicly trusted TLS (DNS-01 ACME is suitable).
+
+Keep the App's WSS port on a firewalled LAN or VPN. If a reverse proxy exposes
+443, preserve WebSocket upgrades and streaming, keep TLS on the inner hop unless
+an explicitly trusted alternative has been tested, and apply handshake rate,
+concurrent-connection, and idle-connection limits. Do not expose 8443 directly
+to the public Internet.
+
+Valid changed options or TLS files are applied only after two identical polls.
+Invalid changed options stop the App so stale credentials cannot remain active.
+Only an invalid/incomplete certificate renewal with otherwise unchanged options
+retains the active validated certificate and retries later. That state marks the
+container unhealthy and is bounded by certificate expiry and a three-poll grace
+period (minimum 10 minutes). For emergency secret or TLS-key rotation, stop the
+App first, edit and save the replacement, revoke the exposed provider
+credential/certificate, then start it and verify `/healthz` plus the served TLS
+fingerprint before reconnecting devices.
+
+The App consumes ElevenLabs Scribe v2 Realtime audio while the user is still
+speaking and streams Flash v2.5 TTS audio before Hermes/TTS completion. It
+retains the same completed-response conversation chain, reset rules, ambiguous
+turn fence, unique device authentication, and explicit long-term-memory scope as
+the Cloudflare deployment.
+
+Home Assistant's `password` option type masks credentials in the ordinary App
+form. `!secret` references are a useful editing convenience, but Supervisor
+resolves them into clear values in `/data/options.json`; App backups contain
+those options. Use encrypted backups, store the backup emergency kit off-device,
+avoid Supervisor DEBUG logging during secret work, and inspect/redact diagnostics
+before sharing them. The App requests no ingress, Home Assistant/Supervisor API,
+host network, audio, device, or privileged access. Home Assistant music and
+announcements remain on the independent encrypted ESPHome Native API media path.
+
+The App declares cold backup so local SQLite state is copied while stopped.
+Restoring a clone also restores credentials and response pointers: never run
+source and clone together, and rotate provider, Hermes, Access and per-device
+credentials/session scopes before using a lab clone. Cloudflare and local
+Durable Object storage cannot be converted; cutting a device between targets
+starts a new short-term conversation even if the same session scope preserves
+intentional Hermes long-term memory.
+
+The exact options, certificate polling/reconnect behavior, private-network
+boundary, secret caveats, backup/restore procedure, and current experimental
+status are in the App's [complete documentation](../ha_voice_hermes_gateway/DOCS.md).
+Current [Home Assistant App configuration guidance](https://developers.home-assistant.io/docs/apps/configuration/)
+documents `/data/options.json`, the read-only `/ssl` map, `password` schema type,
+and cold backups. No Home Assistant OS or physical Voice PE validation has yet
+been recorded for this App.
+
+## 2B. Publish Hermes through Tunnel and Access for Cloudflare
 
 Do not bind Hermes to a public interface. Point a Cloudflare Tunnel hostname at loopback:
 
@@ -253,8 +333,8 @@ Additional secrets:
 
 | Secret | Required | Purpose |
 | --- | --- | --- |
-| `ELEVENLABS_API_KEY` | yes | Realtime/buffered STT and realtime/HTTP TTS. |
-| `HERMES_API_KEY` | yes | Hermes API bearer; high privilege. |
+| `ELEVENLABS_API_KEY` | yes | Realtime/buffered STT and realtime/HTTP TTS; visible ASCII only because it is sent as an HTTP header. |
+| `HERMES_API_KEY` | yes | Hermes API bearer; high privilege; visible ASCII only. |
 | `DEVICE_TOKENS_JSON` | yes by default | Exact device-ID → unique 32–512-visible-ASCII-byte token map. |
 | `HERMES_SESSION_KEYS_JSON` | yes by default | Exact device-ID → stable Hermes long-term-memory scope map; must cover the token map. |
 | `DEVICE_AUTH_TOKEN` | compatibility only | Shared 32–512-visible-ASCII-byte bearer, accepted only with `ALLOW_SHARED_DEVICE_TOKEN=true`. |
@@ -265,7 +345,7 @@ Additional secrets:
 
 Both Access values must be configured together. Put `CF_ACCESS_CLIENT_SECRET` in an encrypted Worker secret with `wrangler secret put`, never in `[vars]`. Cloudflare exposes variables and secrets to application code through the same string-binding shape, so the gateway can validate the pair but cannot determine how it was deployed; repository review, secret scanning, and the absence of credential names from `wrangler.toml` enforce this boundary. Do not put provider or Hermes credentials in firmware.
 
-`HERMES_SESSION_KEYS_JSON` is Worker-owned rather than device-supplied, so a compromised device cannot choose another user's memory scope. Keys are 1–256 characters without control characters or leading/trailing whitespace. Example:
+`HERMES_SESSION_KEYS_JSON` is Worker-owned rather than device-supplied, so a compromised device cannot choose another user's memory scope. Keys are 1–256 visible ASCII bytes with no spaces because they are sent in `X-Hermes-Session-Key`; use opaque or colon-delimited labels rather than Unicode room names. Example:
 
 ```json
 {

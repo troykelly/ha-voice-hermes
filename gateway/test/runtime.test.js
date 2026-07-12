@@ -314,6 +314,13 @@ async function runRealtimeTurn(socket, inbox, definition) {
 }
 
 describe("compiled Worker runtime", () => {
+  it("offers a minimal readiness route for local supervisors", async () => {
+    const response = await exports.default.fetch("https://voice.test/healthz");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ status: "ok" });
+  });
+
   it("reports a configured realtime service without exposing secrets", async () => {
     const response = await exports.default.fetch("https://voice.test/health");
     expect(response.status).toBe(200);

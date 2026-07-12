@@ -2,7 +2,7 @@
   "name": "ha-voice-hermes-gateway",
   "private": true,
   "scripts": {
-    "build": "worker-build --release",
+    "build": "../scripts/build-gateway-worker.sh",
     "check": "cargo check",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
