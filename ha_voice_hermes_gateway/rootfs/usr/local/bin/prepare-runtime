@@ -213,4 +213,7 @@ chmod 0400 \
   "$generation/fingerprint" \
   "$generation/poll-seconds"
 
-chown -R gateway:gateway "$generation"
+# Keep completed probes root-only. The supervisor hands ownership to the
+# unprivileged runtime only after it selects a stable generation and stops the
+# previous workerd process. This prevents an active compromised runtime from
+# reading replacement credentials while they are merely being polled.

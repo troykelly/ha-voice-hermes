@@ -129,6 +129,14 @@ start_child() {
     return 1
   fi
 
+  if [[ "$(stat -c '%u:%g:%a' "$generation")" != "0:0:700" ||
+        -n "$(find -P "$generation" -xdev -type l -print -quit)" ||
+        -n "$(find -P "$generation" -xdev ! -type d ! -type f -print -quit)" ]]; then
+    log_error "prepared runtime generation has unsafe ownership or file types"
+    return 1
+  fi
+  chown -R --no-dereference gateway:gateway "$generation"
+
   /usr/bin/env -i \
     PATH=/usr/local/bin:/usr/bin:/bin \
     HOME=/nonexistent \

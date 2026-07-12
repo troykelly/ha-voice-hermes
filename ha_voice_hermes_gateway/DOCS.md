@@ -445,9 +445,11 @@ resolved option data; return to normal logging, inspect locally, and redact befo
 sharing. The launcher snapshots and validates the Supervisor options and `/ssl`
 files without following symlinks, then hands a mode-restricted tmpfs generation
 under `/tmp/ha-voice-hermes` to the dedicated unprivileged `gateway` account.
-After `/healthz` succeeds it deletes that generation, and it does not pass
-secrets in process arguments or exported environment variables. Option values
-must never be logged.
+Reload probes stay root-only until selected; the old runtime is stopped before
+ownership of the replacement generation is handed over. After `/healthz`
+succeeds the launcher deletes that generation. Core dumps are disabled, and it
+does not pass secrets in process arguments or exported environment variables.
+Option values must never be logged.
 
 Use independent keys for this service, keep the Hermes profile least-privileged,
 scope the ElevenLabs key, and rotate immediately after suspected exposure. Never

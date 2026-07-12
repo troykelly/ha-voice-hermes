@@ -137,9 +137,10 @@ Supervisor resolves `!secret` references and gives the App clear values in
 `/data/options.json`; cold App backups include those values with the local
 conversation metadata. The launcher safely snapshots and validates the source
 options/TLS files, hands a mode-restricted tmpfs generation to the dedicated
-unprivileged `gateway` account, and deletes it after readiness. It never
-intentionally puts a credential into a process argument, exported environment,
-or log. Supervisor itself [logs a requested `!secret` name](https://github.com/home-assistant/supervisor/blob/1e81816c855310f3217b7f5113573b1b661d4f4d/supervisor/homeassistant/secrets.py#L24-L32)
+unprivileged `gateway` account, and deletes it after readiness. Reload probes
+stay root-only until the old runtime stops and a stable replacement is selected;
+core dumps are disabled. The launcher never intentionally puts a credential into
+a process argument, exported environment, or log. Supervisor itself [logs a requested `!secret` name](https://github.com/home-assistant/supervisor/blob/1e81816c855310f3217b7f5113573b1b661d4f4d/supervisor/homeassistant/secrets.py#L24-L32)
 at info level, so avoid person/room-identifying secret names if those logs may be
 shared.
 

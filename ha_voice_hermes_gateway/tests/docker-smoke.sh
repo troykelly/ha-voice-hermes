@@ -384,6 +384,25 @@ if len(accounts) != 1 or accounts[0] in {"root", "nobody"}:
 PY
 }
 
+assert_workerd_core_dumps_disabled() {
+  local name="$1"
+  local report="${ARTIFACT_DIR}/${name}.workerd-core-limit"
+  # shellcheck disable=SC2016
+  "$DOCKER" exec --user 0 "$name" sh -c '
+    found=0
+    for proc in /proc/[0-9]*; do
+      [ -r "$proc/comm" ] || continue
+      [ "$(cat "$proc/comm" 2>/dev/null)" = workerd ] || continue
+      found=1
+      awk '\''/^Max core file size/ { print $(NF-2), $(NF-1) }'\'' "$proc/limits"
+    done
+    [ "$found" -eq 1 ]
+  ' >"$report" 2>/dev/null || fail "workerd core-file limit could not be inspected"
+  if [[ $(tr -d '[:space:]' <"$report") != 00 ]]; then
+    fail "workerd core dumps are not disabled"
+  fi
+}
+
 snapshot_proc() {
   local name="$1"
   local output="$2"
@@ -467,6 +486,7 @@ audit_running_container() {
   snapshot_runtime_files "$name" "$runtime_snapshot"
   snapshot_workerd_state "$name" "$state_snapshot"
   assert_dedicated_workerd_uid "$name"
+  assert_workerd_core_dumps_disabled "$name"
   assert_gateway_supervisor_environment_is_clean "$name"
 
   assert_secret_free "$logs" "App logs"
