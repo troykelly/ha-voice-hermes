@@ -16,6 +16,6 @@ docker build \
   --output "type=local,dest=${temporary}" \
   "${root}"
 
+rm -rf "${root}/gateway/build"
 install -d -m 0755 "${root}/gateway/build"
-install -m 0644 "${temporary}/index.js" "${root}/gateway/build/index.js"
-install -m 0644 "${temporary}/index_bg.wasm" "${root}/gateway/build/index_bg.wasm"
+cp -R "${temporary}/." "${root}/gateway/build/"

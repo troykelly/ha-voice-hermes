@@ -37,5 +37,4 @@ RUN npm run build
 
 FROM scratch AS artifact
 
-COPY --from=builder /workspace/gateway/build/index.js /index.js
-COPY --from=builder /workspace/gateway/build/index_bg.wasm /index_bg.wasm
+COPY --from=builder /workspace/gateway/build/ /
