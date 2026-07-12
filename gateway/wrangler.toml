@@ -2,7 +2,12 @@ name = "ha-voice-hermes-gateway"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-07-11"
 compatibility_flags = ["no_websocket_standard_binary_type"]
-workers_dev = true
+workers_dev = false
+preview_urls = false
+
+[observability]
+enabled = true
+head_sampling_rate = 0.1
 
 [[durable_objects.bindings]]
 name = "VOICE_SESSIONS"
@@ -13,14 +18,23 @@ tag = "realtime-v2"
 new_sqlite_classes = ["VoiceSession"]
 
 [build]
-command = "cargo install -q worker-build --version 0.8.4 --locked && worker-build --release"
+command = "cargo install -q worker-build --version 0.8.4 --locked && ../scripts/build-gateway-worker.sh"
 
 [vars]
 STT_PROVIDER = "elevenlabs"
 REALTIME_STT_MODEL = "scribe_v2_realtime"
 TTS_MODEL = "eleven_flash_v2_5"
 HERMES_MODEL = "hermes-agent"
-CONVERSATION_IDLE_SECONDS = "0"
+HERMES_PROFILE_ID = "voice-safe"
+HERMES_BINDING_REVISION = "v1"
+CONVERSATION_IDLE_SECONDS = "900"
 MAX_AUDIO_BYTES = "4194304"
-MAX_AUDIO_SECONDS = "120"
+MAX_AUDIO_SECONDS = "30"
+REALTIME_MAX_AUDIO_SECONDS = "30"
+REALTIME_MAX_OUTPUT_SECONDS = "30"
 MAX_HERMES_RESPONSE_BYTES = "2097152"
+MAX_CONNECTION_AUDIO_SECONDS = "900"
+MAX_TURNS_PER_CONNECTION = "256"
+MAX_MESSAGES_PER_CONNECTION = "16384"
+DIAGNOSTIC_V1_ENABLED = "false"
+ELEVENLABS_ENABLE_LOGGING = "true"

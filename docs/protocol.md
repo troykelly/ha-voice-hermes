@@ -1,6 +1,6 @@
 # Device gateway protocol
 
-Realtime v2 is the primary device/gateway contract. Buffered HTTPS v1 remains at `/v1/voice` for explicit diagnostics; its separate named Hermes chain is deprecated for conversational use.
+Realtime v2 is the primary device/gateway contract. Buffered HTTPS v1 is hidden unless an operator explicitly enables it; enabled v1 is stateless and isolated from the realtime conversation.
 
 ## Realtime v2
 
@@ -20,12 +20,12 @@ The URL must use `wss://`. The server accepts only the exact `hermes-voice.realt
 
 `X-Device-Id` is 1–64 ASCII characters, starts with an ASCII letter or number, and otherwise contains only letters, numbers, `.`, `_`, or `-`. It selects both the per-device credential and the per-device Durable Object. HTTP header names are case-insensitive.
 
-Device authentication is resolved in this order:
+Device authentication is fail-closed:
 
-1. When `DEVICE_TOKENS_JSON` is configured, the exact device ID must have a matching token.
-2. Otherwise, `DEVICE_AUTH_TOKEN` is used.
+1. By default `DEVICE_TOKENS_JSON` is required and the exact device ID must have a matching, unique token.
+2. A shared `DEVICE_AUTH_TOKEN` is accepted only when `ALLOW_SHARED_DEVICE_TOKEN=true`; shared mode accepts arbitrary valid device IDs and is not a production default.
 
-Tokens are 16–512 bytes and may not contain ASCII controls. Independent per-device tokens are recommended.
+Tokens are 32–512 visible ASCII bytes (`!` through `~`); spaces, controls, and non-ASCII bytes are rejected consistently by firmware and Worker. The edge compares SHA-256 token digests in constant time, strips the raw `Authorization` header before forwarding the upgrade, and passes only a non-bearer credential fingerprint into the Durable Object/hibernating attachment. Each callback revalidates that fingerprint against current configuration, so rotating a token revokes an established socket.
 
 Authentication, device-ID validation, and subprotocol validation happen before the Worker forwards the upgrade to a Durable Object. Failed handshakes do not create billable voice sessions.
 
@@ -34,6 +34,10 @@ Authentication, device-ID validation, and subprotocol validation happen before t
 WebSocket **text** messages are UTF-8 JSON controls. WebSocket **binary** messages contain exactly one 20-byte header followed by raw PCM16LE. A control object and a binary frame are never concatenated into one WebSocket message.
 
 Malformed JSON, binary frames shorter than 20 bytes, and unsupported required protocol fields are protocol errors. The gateway rejects unknown client control types. A device may ignore an otherwise valid, unknown server status control so optional telemetry can be added compatibly; it must not infer audio or turn state from it. The gateway sends an `error` control when possible, then cancels the current turn or closes the socket when `fatal` is true.
+
+RFC 6455 message fragmentation and transport-library receive chunking do not change the application contract. Each receiver bounds the complete reassembled message and verifies every transport chunk's declared frame length and exact offset before appending it. A gap, overlap, changed frame length/opcode, unexpected continuation, or new data frame before the prior fragmented message finishes is a protocol error. Application `pong` and future connection-scoped status controls do not require a `turn_id` and do not mutate turn state.
+
+Connection budgets are cumulative across hibernation: by default one socket may carry 16,384 application messages, 256 turn attempts, and 900 seconds of microphone PCM. Exceeding a budget sends fatal `queue_overflow` and closes the socket. Reaching any exact durable limit rejects the next upgrade with HTTP `429` until the 24-hour window rolls over. Reset and ping messages are durably charged before reset storage or a pong response, so reconnecting cannot bypass the accounting boundary. Reconnecting is not a replay instruction and does not relax either 30-second per-turn audio maximum.
 
 ### Binary audio frame
 
@@ -52,7 +56,7 @@ There is deliberately no magic prefix; the WebSocket subprotocol and fixed heade
 
 All multi-byte header integers use network byte order (big-endian). PCM samples remain little-endian.
 
-Payload length must be non-zero and even. Device uplink targets 2,048 payload bytes: 1,024 samples or 64 ms at 16 kHz. The final frame may be shorter. `first_sample` starts at zero and advances by `payload_length / 2`; it detects dropped, duplicated, or misordered audio independently of `sequence`.
+Payload length must be non-zero, even, and no larger than 2,048 bytes. Device uplink and gateway downlink use 2,048 payload bytes: 1,024 samples or 64 ms at 16 kHz. Every non-terminal microphone frame is exactly 2,048 bytes; at most the final frame may be shorter. After a short input frame, any additional input frame is a sequence error. `first_sample` starts at zero and advances by `payload_length / 2`; it detects dropped, duplicated, or misordered audio independently of `sequence`. The gateway counts decoded TTS PCM before reframing and permits at most `REALTIME_MAX_OUTPUT_SECONDS` (default and hard maximum 30 seconds) in one turn.
 
 Normal frames set flags to zero. These two flags are defined only for microphone input; playback output sets flags to zero. `0x01` may mark the final observed microphone frame, but `turn.commit` and its `last_seq` remain the authoritative end-of-input declaration. `0x02` reports a capture discontinuity and is fatal for that turn: the gateway cancels instead of transcribing known-corrupt or gapped PCM. It never permits a receiver to synthesize missing audio. Input flags may be ORed. Values containing any bit outside `0x03` are invalid.
 
@@ -79,7 +83,7 @@ The first application message after upgrade:
 {
   "v": 2,
   "type": "hello",
-  "firmware": "ha-voice-hermes/0.2.0",
+  "firmware": "ha-voice-hermes/0.3.0",
   "input": "pcm_s16le_16000_mono",
   "output": "pcm_s16le_16000_mono",
   "barge_in": true
@@ -151,7 +155,7 @@ Cancellation is not transactional rollback. A Hermes tool may already have produ
 }
 ```
 
-Returns playback credit through the highest contiguous output frame consumed through `seq`. “Consumed” means every byte of that frame has left the Hermes 128 KiB network receive ring for the fixed 4 KiB local speaker-staging buffer; it does not mean the downstream speaker accepted it or the DAC made it audible. Merely inserting a WebSocket frame into the receive ring does not release credit, and only one staging buffer exists, so stalled downstream playback quickly stops further credit. The device never acknowledges an old or cancelled turn, normally coalesces progress every four consumed frames, and sends final progress after consuming the frame declared by `tts.end`. The gateway gates transmission to 32 not-yet-consumed output frames and reframes provider PCM to a 2,048-byte target even though the receiver validates an individual payload up to 8,192 bytes. This propagates local queue backpressure to the TTS reader instead of allowing a faster-than-realtime provider to fill the device indefinitely.
+Returns playback credit through the highest contiguous output frame consumed through `seq`. “Consumed” means every byte of that frame has left the Hermes 128 KiB network receive ring for the fixed 4 KiB local speaker-staging buffer; it does not mean the downstream speaker accepted it or the DAC made it audible. Merely inserting a WebSocket frame into the receive ring does not release credit, and only one staging buffer exists, so stalled downstream playback quickly stops further credit. The device never acknowledges an old or cancelled turn, normally coalesces progress every four consumed frames, and sends final progress after consuming the frame declared by `tts.end`. The gateway gates transmission to 32 not-yet-consumed 2,048-byte output frames. This propagates local queue backpressure to the TTS reader instead of allowing a faster-than-realtime provider to fill the device indefinitely.
 
 #### `ping`
 
@@ -222,9 +226,9 @@ The gateway has installed turn state and is ready for binary input sequence zero
 
 Acknowledges the highest contiguous input accepted through `seq`. An ACK never skips a gap. The firmware gates microphone transmission to at most 32 unacknowledged 2,048-byte frames (64 KiB). The gateway normally coalesces ACKs every four frames and sends final progress at commit.
 
-#### `transcript.final`
+#### Reserved transcript controls
 
-Before the final event, the gateway may send optional, mutable telemetry:
+The v2 codec defines the following optional extension for a future display client; the current gateway does not emit it:
 
 ```json
 {
@@ -235,9 +239,9 @@ Before the final event, the gateway may send optional, mutable telemetry:
 }
 ```
 
-`transcript.partial` may be replaced by any later partial and may be omitted entirely. It is non-authoritative, must not be treated as a committed command, and is never sent to Hermes. The v2 protocol reserves this extension, but the current gateway intentionally does not forward Scribe partials, protecting the firmware's bounded control queue.
+`transcript.partial` may be replaced by any later partial and is non-authoritative. The v2 codec reserves this extension for a future display client, but the current gateway never emits it.
 
-The authoritative event is:
+The codec also defines a committed form:
 
 ```json
 {
@@ -248,7 +252,7 @@ The authoritative event is:
 }
 ```
 
-Contains the non-empty committed Scribe transcript used as Hermes input. Optional STT partials are telemetry only and cannot trigger Hermes.
+`transcript.final` is likewise reserved by the codec, but the current gateway never emits it to the headless Voice PE. This avoids returning user speech/PII to a device that has no transcript UI. The committed transcript stays transient inside the Durable Object and is sent only to Hermes. Neither reserved transcript control is part of current turn ordering.
 
 #### `response.start`
 
@@ -256,7 +260,7 @@ Contains the non-empty committed Scribe transcript used as Hermes input. Optiona
 {"v":2,"type":"response.start","turn_id":"0000000000000042"}
 ```
 
-Hermes accepted the committed transcript and began a streaming response. It does not imply that a tool or the response will complete.
+The authenticated Hermes origin returned a successful streaming response to the request. This is emitted only after Hermes accepts the committed transcript, not when the Worker merely starts a fetch. It does not imply that a tool or the response will complete.
 
 #### `tts.start`
 
@@ -300,20 +304,19 @@ The gateway has reached the terminal successful state for the turn. The device m
   "type": "error",
   "turn_id": "0000000000000042",
   "code": "stt_failed",
-  "message": "Voice transcription failed",
   "fatal": false
 }
 ```
 
-`turn_id`, `message`, and `fatal` are optional. `code` is stable and safe to log; `message` is generic and never contains provider bodies, transcripts, URLs, or credentials. A nonfatal error terminates the affected turn. A fatal error terminates the WebSocket.
+`turn_id`, `message`, and `fatal` are optional. The hardened gateway omits `message`; `code` is stable and safe to log. Every error is terminal for the affected turn. A fatal error also terminates the WebSocket.
 
 Representative codes include:
 
 - `protocol_error`, `unsupported_version`, `invalid_frame`, `sequence_error`;
 - `turn_conflict`, `unknown_turn`, `queue_overflow`, `turn_timeout`;
-- `conversation_busy`, `conversation_reset_failed`, `conversation_unavailable`, `conversation_expired`;
+- `conversation_busy`, `conversation_reset_failed`, `conversation_unavailable`, `conversation_expired`, `conversation_ambiguous`;
 - `stt_failed`, `empty_transcript`, `hermes_failed`, `tts_failed`;
-- `cancelled`, `configuration_error`, `internal_error`.
+- `cancelled`, `configuration_error`, `authentication_failed`, `internal_error`.
 
 Clients must treat unknown codes as an error without retrying the current turn.
 
@@ -327,9 +330,8 @@ S  conversation.reset.done(request_id, conversation_id)
 C  turn.start
 S  turn.ready
 C  binary input seq 0..N
-S  cumulative input.ack; a future implementation may interleave optional transcript.partial
+S  cumulative input.ack
 C  turn.commit(last_seq=N)
-S  transcript.final
 S  response.start
 S  tts.start
 S  binary output seq 0..M
@@ -342,15 +344,17 @@ Controls and binary frames can be interleaved after their ordering prerequisites
 
 ### Reconnect, retry, and idempotency
 
-A WebSocket connection is one transport epoch. Reconnect repeats `hello` and starts a new epoch; it does not resume partially acknowledged audio. With unchanged Worker configuration it does not create a new conversation: the returned `ready.conversation_id` remains the persisted UUID. A turn interrupted by network loss is ambiguous because Hermes may already have run tools, so neither device nor gateway automatically replays it.
+A WebSocket connection is one transport epoch. Reconnect repeats `hello` and starts a new epoch; it does not resume partially acknowledged audio. With unchanged Worker configuration it does not by itself create a new conversation: the returned `ready.conversation_id` remains the persisted UUID. A turn interrupted after Hermes may have accepted it is ambiguous because tools may already have run, so neither device nor gateway automatically replays it.
 
-The per-device Durable Object retains the conversation UUID and only the previous **completed** Hermes response ID as its next-turn head. A failed or disconnected candidate response does not become conversation history. The user can speak a new turn after reconnect, continuing from the prior completed head. Reboot, wake, cancel, and barge-in follow the same rule.
+The per-device Durable Object retains the conversation UUID and only the previous **completed** Hermes response ID as its next-turn head. A failed candidate is not promoted. On restart, a journaled response retrieved as exactly `completed` may be promoted. A journal still at request-starting, missing, or non-completed state is `conversation_ambiguous`; new audio turns remain blocked until an explicit `conversation.reset`. This avoids both duplicating a tool and silently forking from the old head.
 
 An unacknowledged explicit reset is the exception to ordinary non-retry: its side effect is deliberately idempotent. Firmware may resend the same `conversation.reset.request_id` after `ready` until it receives the matching `conversation.reset.done`; it never retries an audio turn.
 
-Idle expiry and Hermes-binding changes are server-owned boundaries checked when `turn.start` is reserved, not additional client controls. An enabled idle timeout uses the latest accepted-turn start or later completion timestamp. If the normalized Hermes base URL, configured model/route label, or resolved session key differs from the conversation's stored binding, the gateway rotates before processing that turn and omits the old `previous_response_id`. A later `ready` reports the new UUID; audio-turn ordering is unchanged.
+Idle expiry and Hermes-binding changes are server-owned boundaries checked when `turn.start` is reserved, not additional client controls. The idle timeout defaults to 900 seconds and uses the latest accepted-turn start or later completion timestamp; disabling it requires `ALLOW_UNBOUNDED_CONVERSATION=true`. If the normalized Hermes base URL, configured model/route label, profile ID, binding revision, or resolved session key differs from the stored binding, the gateway rotates before processing that turn and omits the old `previous_response_id`. A later `ready` reports the new UUID; audio-turn ordering is unchanged.
 
 ## Buffered HTTPS v1 diagnostic compatibility route
+
+The route returns generic `404` unless `DIAGNOSTIC_V1_ENABLED=true`.
 
 ### Request
 
@@ -380,9 +384,9 @@ The response body is headerless PCM16LE. HTTP chunk boundaries are not audio-fra
 
 ### Errors and idempotency
 
-Errors are generic JSON with `Cache-Control: no-store`. Representative HTTP statuses are `400`, `401`, `404`, `405`, `413`, `415`, `502`, and `503`.
+Errors are generic JSON with `Cache-Control: no-store`. Representative HTTP statuses are `400`, `401`, `404`, `405`, `413`, `415`, `429`, `502`, and `503`.
 
-Buffered v1 has no durable turn idempotency key and is never an automatic fallback for an ambiguous realtime turn. It uses a separate Hermes named conversation, `voice-buffered-<device-id>`, and does not read or advance the realtime Durable Object UUID/head. Its context can continue across buffered calls but cannot be treated as semantically continuous with realtime v2. Operators choose it before a new diagnostic recording begins; interactive use is deprecated.
+Buffered v1 has no durable turn idempotency key and is never an automatic fallback for an ambiguous realtime turn. Each request uses Hermes `store: false`, no `previous_response_id`, and a hashed `diagnostic:<sha256>` long-term-memory scope distinct from realtime. It does not create a short-term response chain and does not read or advance the realtime Durable Object UUID/head. Operators enable it only for a planned provider diagnostic and should disable it again afterward.
 
 ## Health
 

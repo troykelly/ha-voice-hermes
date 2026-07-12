@@ -1,0 +1,331 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    ci-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Secret history
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan reachable Git history
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  gateway:
+    name: Gateway and Worker runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: gateway/package-lock.json
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Keep credential bindings out of Wrangler variables
+        run: |
+          for secret in \
+            DEVICE_TOKENS_JSON HERMES_SESSION_KEYS_JSON DEVICE_AUTH_TOKEN \
+            ELEVENLABS_API_KEY STT_API_KEY HERMES_API_KEY CF_ACCESS_CLIENT_SECRET; do
+            if grep -Eq "^[[:space:]]*${secret}[[:space:]]*=" wrangler.toml; then
+              echo "Credential binding ${secret} must be deployed with wrangler secret put" >&2
+              exit 1
+            fi
+          done
+      - name: Verify Rust formatting
+        run: cargo fmt --check
+      - name: Run Rust tests
+        run: cargo test --locked
+      - name: Run strict Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Audit Rust dependencies
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit
+      - name: Audit JavaScript dependencies
+        run: npm audit --audit-level=high
+      - name: Build optimized Worker in the canonical release environment
+        working-directory: .
+        run: scripts/build-gateway-worker-canonical.sh
+      - name: Verify complete generated runtime notice bundles
+        working-directory: .
+        run: |
+          python3 scripts/generate-wasm-third-party-notices.py --check
+          python3 scripts/generate-workerd-rust-third-party-notices.py --release-check
+          python3 scripts/refresh-workerd-native-notices.py --check
+          python3 scripts/verify-workerd-native-notices.py
+          python3 -m unittest \
+            scripts/tests/test_wasm_third_party_notices.py \
+            scripts/tests/test_workerd_native_notices.py \
+            scripts/tests/test_workerd_rust_third_party_notices.py
+      - name: Verify Home Assistant App Worker artifacts
+        run: ../scripts/sync-addon-worker-artifacts.sh --check
+      - name: Reject developer paths in release artifacts
+        run: ../scripts/check-gateway-artifact-privacy.sh
+      - name: Test inside the Workers runtime
+        run: npx vitest run --max-workers=1 --no-isolate
+      - name: Validate Cloudflare deployment bundle
+        run: npx wrangler deploy --dry-run --outdir /tmp/wrangler-dry-run
+
+  home-assistant-app-lint:
+    name: Home Assistant App metadata and bootstrap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Run current Home Assistant App linter
+        uses: frenck/action-addon-linter@f995494fd84fae6310d23617e66d0e37de4f14eb # v2.21.0
+        with:
+          path: ./ha_voice_hermes_gateway
+      - name: Validate every GitHub Actions workflow
+        run: |
+          archive="${RUNNER_TEMP}/actionlint.tar.gz"
+          curl --fail --location --silent --show-error \
+            --output "${archive}" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  '"${archive}" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" \
+            --directory "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" -color
+      - name: Validate repository, translation, and documentation metadata
+        run: ruby scripts/validate-home-assistant-app-metadata.rb
+      - name: Verify locked container licence inventory and notices
+        run: python3 scripts/verify-container-third-party-notices.py
+      - name: Avoid broken July 2026 bounded secret/string schemas
+        run: |
+          if grep -Eq ':[[:space:]]*"?(password|str)\(' ha_voice_hermes_gateway/config.yaml; then
+            echo "Supervisor 2026.07 applies numeric Range validation to bounded strings; use runtime length validation." >&2
+            exit 1
+          fi
+      - name: Check bootstrap shell
+        run: |
+          bash -n \
+            scripts/build-debian-corresponding-source.sh \
+            ha_voice_hermes_gateway/rootfs/etc/services.d/gateway/finish \
+            ha_voice_hermes_gateway/rootfs/etc/services.d/gateway/run \
+            ha_voice_hermes_gateway/rootfs/usr/local/bin/gateway-healthcheck \
+            ha_voice_hermes_gateway/rootfs/usr/local/bin/gateway-supervisor \
+            ha_voice_hermes_gateway/rootfs/usr/local/bin/prepare-runtime \
+            ha_voice_hermes_gateway/tests/secure-snapshot.sh \
+            ha_voice_hermes_gateway/tests/docker-smoke.sh \
+            ha_voice_hermes_gateway/tests/validate-options.sh
+          shellcheck \
+            scripts/build-debian-corresponding-source.sh \
+            ha_voice_hermes_gateway/rootfs/etc/services.d/gateway/finish \
+            ha_voice_hermes_gateway/rootfs/etc/services.d/gateway/run \
+            ha_voice_hermes_gateway/rootfs/usr/local/bin/gateway-healthcheck \
+            ha_voice_hermes_gateway/rootfs/usr/local/bin/gateway-supervisor \
+            ha_voice_hermes_gateway/rootfs/usr/local/bin/prepare-runtime \
+            ha_voice_hermes_gateway/tests/secure-snapshot.sh \
+            ha_voice_hermes_gateway/tests/docker-smoke.sh \
+            ha_voice_hermes_gateway/tests/validate-options.sh
+      - name: Exercise strict App option validation
+        run: ha_voice_hermes_gateway/tests/validate-options.sh
+      - name: Parse the custom AppArmor profile
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends apparmor-utils
+          sudo apparmor_parser --skip-kernel-load ha_voice_hermes_gateway/apparmor.txt
+      - name: Exercise hardened snapshot helper
+        run: ha_voice_hermes_gateway/tests/secure-snapshot.sh
+      - name: Compile Python verification helpers
+        run: |
+          python3 -m py_compile \
+            scripts/generate-debian-source-lock.py \
+            scripts/generate-wasm-third-party-notices.py \
+            scripts/generate-workerd-rust-third-party-notices.py \
+            scripts/refresh-workerd-native-notices.py \
+            scripts/verify-container-third-party-notices.py \
+            scripts/verify-workerd-native-notices.py \
+            scripts/tests/test_wasm_third_party_notices.py \
+            scripts/tests/test_workerd_native_notices.py \
+            scripts/tests/test_workerd_rust_third_party_notices.py \
+            ha_voice_hermes_gateway/tests/wss_ready.py
+      - name: Audit pinned workerd package
+        working-directory: ha_voice_hermes_gateway
+        run: |
+          npm ci --omit=dev --no-audit --no-fund
+          test "$(node_modules/workerd/bin/workerd --version)" = "workerd 2026-07-08"
+          npm audit --omit=dev --audit-level=high
+
+  home-assistant-app-image:
+    name: Home Assistant App image (${{ matrix.arch }})
+    needs: [gateway, home-assistant-app-lint]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Build native architecture image
+        env:
+          IMAGE: local/ha-voice-hermes-gateway:${{ matrix.arch }}
+        run: |
+          version="$(sed -n 's/^version: "\([^"]*\)"$/\1/p' ha_voice_hermes_gateway/config.yaml)"
+          test -n "${version}"
+          docker build \
+            --pull \
+            --platform "${{ matrix.platform }}" \
+            --build-arg "BUILD_ARCH=${{ matrix.arch }}" \
+            --build-arg "BUILD_DATE=$(date --rfc-3339=seconds --utc)" \
+            --build-arg "BUILD_DESCRIPTION=Local realtime Voice Preview Edition gateway for Hermes Agent and ElevenLabs" \
+            --build-arg "BUILD_NAME=Home Assistant Voice Hermes Gateway" \
+            --build-arg "BUILD_REVISION=${GITHUB_SHA}" \
+            --build-arg "BUILD_VERSION=${version}" \
+            --tag "${IMAGE}" \
+            ha_voice_hermes_gateway
+      - name: Run TLS, WSS, persistence, and PII smoke tests
+        env:
+          APP_START_TIMEOUT: 120
+          IMAGE: local/ha-voice-hermes-gateway:${{ matrix.arch }}
+        run: ha_voice_hermes_gateway/tests/docker-smoke.sh "${IMAGE}"
+      - name: Verify exact Debian binary-to-source closure
+        env:
+          IMAGE: local/ha-voice-hermes-gateway:${{ matrix.arch }}
+        run: python3 scripts/generate-debian-source-lock.py --image "${IMAGE}" --check
+      - name: Generate architecture SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          artifact-name: ha-voice-hermes-gateway-${{ matrix.arch }}.spdx.json
+          config: .syft.yaml
+          format: spdx-json
+          image: local/ha-voice-hermes-gateway:${{ matrix.arch }}
+          output-file: ${{ runner.temp }}/ha-voice-hermes-gateway-${{ matrix.arch }}.spdx.json
+          syft-version: v1.46.0
+          upload-artifact: true
+          upload-release-assets: false
+      - name: Scan runtime image for fixed high-impact vulnerabilities and secrets
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          exit-code: "1"
+          ignore-unfixed: true
+          image-ref: local/ha-voice-hermes-gateway:${{ matrix.arch }}
+          scan-type: image
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          timeout: 10m0s
+          version: v0.72.0
+
+  firmware:
+    name: ESPHome factory and configured firmware
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: firmware
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned ESPHome
+        run: python3 -m pip install --disable-pip-version-check "esphome==2026.6.5"
+      - name: Verify vendored wake-model integrity
+        working-directory: firmware/models
+        run: sha256sum --check SHA256SUMS
+      - name: Verify credentialed WebSocket redirects fail closed
+        run: |
+          source=idf_components/esp_websocket_client/esp_websocket_client.c
+          grep -Fqx '#define WS_TRANSPORT_REDIRECT_HEADER_SUPPORT    0' "$source"
+          grep -Fq 'else if (WS_HTTP_REDIRECT(result)) {' "$source"
+          grep -Fq 'client->error_handle.error_type = WEBSOCKET_ERROR_TYPE_HANDSHAKE;' "$source"
+          grep -Fq 'esp_websocket_client_abort_connection(client, WEBSOCKET_ERROR_TYPE_HANDSHAKE);' "$source"
+      - name: Generate isolated compile-test credentials
+        env:
+          WIFI_SSID: ci-wifi-canary-7f93d6b2
+          WIFI_PASSWORD: ci-password-canary-0c4f2281
+          HERMES_GATEWAY_URL: wss://ci-gateway-canary.invalid/v2/realtime
+        run: ../scripts/generate-device-secrets.sh secrets.yaml
+      - name: Validate factory configuration
+        run: esphome config hermes-voice-pe.factory.yaml
+      - name: Validate configured firmware
+        run: esphome config hermes-voice-pe.local.yaml
+      - name: Enforce firmware security and capture bounds
+        run: |
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          mkdir -p "$work/firmware"
+          cp -R components models packages hermes-voice-pe.factory.yaml hermes-voice-pe.local.yaml secrets.yaml "$work/firmware/"
+          sed -i 's/max_recording_duration: 30s/max_recording_duration: 31s/' "$work/firmware/packages/hermes-voice-pe-base.yaml"
+          if esphome config "$work/firmware/hermes-voice-pe.factory.yaml" >"$work/config.log" 2>&1; then
+            echo "A recording duration beyond the realtime/ring bound was accepted" >&2
+            exit 1
+          fi
+          grep -Fq 'value must be at most 30s' "$work/config.log"
+          sed -i 's/max_recording_duration: 31s/max_recording_duration: 30s/' "$work/firmware/packages/hermes-voice-pe-base.yaml"
+          short_token=$(printf 'x%.0s' {1..31})
+          sed -i "s/^hermes_device_token:.*/hermes_device_token: '$short_token'/" "$work/firmware/secrets.yaml"
+          if esphome config "$work/firmware/hermes-voice-pe.local.yaml" >"$work/token.log" 2>&1; then
+            echo "A device token below the Worker minimum was accepted" >&2
+            exit 1
+          fi
+          grep -Fq 'auth_token must contain 32-512 visible ASCII bytes' "$work/token.log"
+      - name: Compile factory firmware
+        run: esphome compile hermes-voice-pe.factory.yaml
+      - name: Compile configured firmware
+        run: esphome compile hermes-voice-pe.local.yaml
+      - name: Verify the immutable WebSocket dependency in generated source
+        run: |
+          for build in \
+            .esphome/build/hermes-voice-pe-factory \
+            .esphome/build/hermes-voice-pe-local; do
+            generated=$(find "$build" -path '*/managed_components/*esp_websocket_client/esp_websocket_client.c' -print -quit)
+            test -n "$generated"
+            cmp idf_components/esp_websocket_client/esp_websocket_client.c "$generated"
+          done
+      - name: Verify TLS certificate-date enforcement
+        run: |
+          grep -Fqx 'CONFIG_MBEDTLS_HAVE_TIME_DATE=y' .esphome/build/hermes-voice-pe-factory/sdkconfig.hermes-voice-pe
+          grep -Fqx 'CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y' .esphome/build/hermes-voice-pe-factory/sdkconfig.hermes-voice-pe
+      - name: Prove factory image contains no compile-test credentials
+        run: |
+          factory_bin=$(find .esphome/build/hermes-voice-pe-factory -name firmware.bin -print -quit)
+          test -n "$factory_bin"
+          while IFS= read -r canary; do
+            if grep -aFq -- "$canary" "$factory_bin"; then
+              echo "Factory image contains a configured credential value" >&2
+              exit 1
+            fi
+          done < <(sed -n "s/^[^:]*: '\\(.*\\)'$/\\1/p" secrets.yaml)

@@ -1,0 +1,1295 @@
+{
+  "binary_inspection": {
+    "additional_library_markers": [
+      "brotli",
+      "icu",
+      "simdutf",
+      "sqlite",
+      "zlib",
+      "zstd"
+    ],
+    "linux-amd64": {
+      "bundled_glibc_trig_symbols_found": false,
+      "needed": [
+        "ld-linux-x86-64.so.2",
+        "libc.so.6",
+        "libm.so.6"
+      ]
+    },
+    "linux-arm64": {
+      "bundled_glibc_trig_symbols_found": false,
+      "needed": [
+        "ld-linux-aarch64.so.1",
+        "libc.so.6",
+        "libm.so.6"
+      ]
+    },
+    "method": "readelf dynamic NEEDED plus strings/nm inspection of the exact hash-locked, unstripped Linux binaries",
+    "native_external_repository_markers": [
+      "abseil-cpp",
+      "boringssl",
+      "capnp-cpp",
+      "perfetto",
+      "tcmalloc",
+      "v8",
+      "workerd-cxx"
+    ],
+    "source_selected_native_components": [
+      "re2"
+    ],
+    "static_runtime_markers": [
+      "libcxxabi/src/private_typeinfo.cpp",
+      "libcxxabi/src/cxa_demangle.cpp",
+      "_Unwind_RaiseException"
+    ],
+    "toolchain_comments": {
+      "linux-amd64": [
+        "Linker: Ubuntu LLD 19.1.7",
+        "GCC: (Ubuntu 12.3.0-1ubuntu1~22.04.3) 12.3.0",
+        "Ubuntu clang version 19.1.7 (++20250114103320+cd708029e0b2-1~exp1~20250114103432.75)"
+      ],
+      "linux-arm64": [
+        "Linker: Ubuntu LLD 19.1.7",
+        "GCC: (Ubuntu 12.3.0-1ubuntu1~22.04.3) 12.3.0",
+        "Ubuntu clang version 19.1.7 (++20250114103320+cd708029e0b2-1~exp1~20250114103432.75)"
+      ]
+    }
+  },
+  "blobs": [
+    {
+      "encoding": "text-section",
+      "end_marker": "# GN target: //src/perfetto_cmd:perfetto\n",
+      "path": "evidence/perfetto-56.1/BUILD.libperfetto_client_experimental",
+      "sha256": "9928aacfb1d653d161ed1cc1541447c56656ca9824eaf4e37528cf1b16adedca",
+      "source_sha256": "a09ea43cd469a8e04af014ed7e3cdfa0bcb4cb25f054edb73525e051068c1e8c",
+      "start_marker": "# GN target: //:libperfetto_client_experimental\n",
+      "url": "https://raw.githubusercontent.com/google/perfetto/c794fceabe584dc9172e5512aaaeecc21019a635/BUILD"
+    },
+    {
+      "encoding": "text-section",
+      "end_marker": "# GN target: //src/base:base\n",
+      "path": "evidence/perfetto-56.1/BUILD.src_base_regex_regex",
+      "sha256": "831b2c74f78d58f8038df63df93a4576000b390abe633b26be98ce01d049811e",
+      "source_sha256": "a09ea43cd469a8e04af014ed7e3cdfa0bcb4cb25f054edb73525e051068c1e8c",
+      "start_marker": "# GN target: //src/base/regex:regex\n",
+      "url": "https://raw.githubusercontent.com/google/perfetto/c794fceabe584dc9172e5512aaaeecc21019a635/BUILD"
+    },
+    {
+      "path": "evidence/perfetto-56.1/MODULE.bazel",
+      "sha256": "cf6b9f8b21aa7f31b86dd0085b300325f6f6e91d20da86cb60015b36befabd0e",
+      "url": "https://raw.githubusercontent.com/google/perfetto/c794fceabe584dc9172e5512aaaeecc21019a635/MODULE.bazel"
+    },
+    {
+      "path": "evidence/perfetto-56.1/bazel/perfetto_deps.bzl",
+      "sha256": "5fbb355c5d2c6d1444cb5ce2b55265e48566709100681193888e153e6e1adf83",
+      "url": "https://raw.githubusercontent.com/google/perfetto/c794fceabe584dc9172e5512aaaeecc21019a635/bazel/perfetto_deps.bzl"
+    },
+    {
+      "path": "evidence/perfetto-56.1/bazel/standalone/perfetto_cfg.bzl",
+      "sha256": "8bdd7dd59d3dc43fcceaeb8010791821ad6293ff0fb87bc5f5b58de48f380796",
+      "url": "https://raw.githubusercontent.com/google/perfetto/c794fceabe584dc9172e5512aaaeecc21019a635/bazel/standalone/perfetto_cfg.bzl"
+    },
+    {
+      "path": "evidence/perfetto-56.1/src/base/regex/regex.cc",
+      "sha256": "48f36707927ae585b8fd6cd7dd17a7cbd6435f6ef1943129c8168fed29b0a122",
+      "url": "https://raw.githubusercontent.com/google/perfetto/c794fceabe584dc9172e5512aaaeecc21019a635/src/base/regex/regex.cc"
+    },
+    {
+      "path": "evidence/perfetto-56.1/src/base/regex/regex_re2.h",
+      "sha256": "6a157fd31bf0c4e25b9009bedc4f4f240b7838d27ce70db3240d68d208dc3252",
+      "url": "https://raw.githubusercontent.com/google/perfetto/c794fceabe584dc9172e5512aaaeecc21019a635/src/base/regex/regex_re2.h"
+    },
+    {
+      "path": "evidence/workerd-1.20260708.1/.bazelrc",
+      "sha256": "251148c4f9df11488c48da424c05a7e14d1c3ada06e4849224e90054a414902f",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd/99057e45cb7152cc5efc59b8d2182386fe1e3eec/.bazelrc"
+    },
+    {
+      "path": "evidence/workerd-1.20260708.1/.github/actions/setup-runner/action.yml",
+      "sha256": "14b153f4b7bc453935157783e6855ba7e8df360eefa393c01100aa59d5e0fe21",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd/99057e45cb7152cc5efc59b8d2182386fe1e3eec/.github/actions/setup-runner/action.yml"
+    },
+    {
+      "path": "evidence/workerd-1.20260708.1/.github/workflows/release.yml",
+      "sha256": "3a7664e445f28b6971550c197258be58e16d43066b33f12aeb9c0c1ce8dded3e",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd/99057e45cb7152cc5efc59b8d2182386fe1e3eec/.github/workflows/release.yml"
+    },
+    {
+      "path": "evidence/workerd-1.20260708.1/MODULE.bazel",
+      "sha256": "952ed2c3491bb114dc0ed805472f4a3bc6e8561421aa65bb444ab9239b6a83c6",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd/99057e45cb7152cc5efc59b8d2182386fe1e3eec/MODULE.bazel"
+    },
+    {
+      "path": "evidence/workerd-1.20260708.1/build/deps/gen/build_deps.MODULE.bazel",
+      "sha256": "3fef03a3a77837ea63cc4f3c605906a0b15917d129cb5109a4dff64620adb402",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd/99057e45cb7152cc5efc59b8d2182386fe1e3eec/build/deps/gen/build_deps.MODULE.bazel"
+    },
+    {
+      "path": "evidence/workerd-1.20260708.1/build/deps/gen/deps.MODULE.bazel",
+      "sha256": "5eacdcab2e9b2a28fe26ae6141b40613afbb48c8489bc7e8be36846896bb8c38",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd/99057e45cb7152cc5efc59b8d2182386fe1e3eec/build/deps/gen/deps.MODULE.bazel"
+    },
+    {
+      "path": "evidence/workerd-1.20260708.1/build/deps/v8.MODULE.bazel",
+      "sha256": "0eaf7a3ae58ebed16a074025326ee5bc80be80523c56a0dd26b729b7c8392088",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd/99057e45cb7152cc5efc59b8d2182386fe1e3eec/build/deps/v8.MODULE.bazel"
+    },
+    {
+      "path": "evidence/workerd-1.20260708.1/build/perfetto/MODULE.bazel",
+      "sha256": "70cb1d7e1ae54d2812cf01d2f8469594b884c37ebc7452c252e9816e89e342b5",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd/99057e45cb7152cc5efc59b8d2182386fe1e3eec/build/perfetto/MODULE.bazel"
+    },
+    {
+      "path": "evidence/workerd-1.20260708.1/src/workerd/util/BUILD.bazel",
+      "sha256": "fe20ee40ec4343964e210a5f7f40a54b48d18a84d64cda6d1e2943c5f705596a",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd/99057e45cb7152cc5efc59b8d2182386fe1e3eec/src/workerd/util/BUILD.bazel"
+    },
+    {
+      "path": "notices/abseil-cpp-20260526.0/AUTHORS",
+      "sha256": "1fd39030c119b4c97014f59e0ad0ed65f23475bbdf55a52740f31eb82b34b4ee",
+      "url": "https://raw.githubusercontent.com/abseil/abseil-cpp/5650e9cf76d3be4318d5fa3af38ee483ddfd5e4a/AUTHORS"
+    },
+    {
+      "path": "notices/abseil-cpp-20260526.0/LICENSE",
+      "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747",
+      "url": "https://raw.githubusercontent.com/abseil/abseil-cpp/5650e9cf76d3be4318d5fa3af38ee483ddfd5e4a/LICENSE"
+    },
+    {
+      "path": "notices/ada-url-3.4.4/LICENSE-APACHE",
+      "sha256": "508d4676d4083e874df706f302d9d42e5e7f9aed3f5a7ea614dc6d2b2252a22f",
+      "url": "https://raw.githubusercontent.com/ada-url/ada/8d50724a7dea209a05234a445e28f97994b0a5f6/LICENSE-APACHE"
+    },
+    {
+      "path": "notices/ada-url-3.4.4/LICENSE-MIT",
+      "sha256": "af0d7d2cef91fc243cf4ad98570b03d1f26f5e0227cad0f5f4a7376e2feb3160",
+      "url": "https://raw.githubusercontent.com/ada-url/ada/8d50724a7dea209a05234a445e28f97994b0a5f6/LICENSE-MIT"
+    },
+    {
+      "path": "notices/boringssl-0.20251002.0/AUTHORS",
+      "sha256": "6e5283f25977ae2fbbf5fd8a840b7184b2b48915279c10bf01107263d3f26936",
+      "url": "https://raw.githubusercontent.com/google/boringssl/52bb3988e3475e37664b0dd5395af49a55d343a2/AUTHORS"
+    },
+    {
+      "path": "notices/boringssl-0.20251002.0/LICENSE",
+      "sha256": "827c8d8fc207c2392794eef9e00fe246f9f61fdcc132556c275be3dd8c3cd97f",
+      "url": "https://raw.githubusercontent.com/google/boringssl/52bb3988e3475e37664b0dd5395af49a55d343a2/LICENSE"
+    },
+    {
+      "path": "notices/boringssl-0.20251002.0/third_party/fiat/AUTHORS",
+      "sha256": "ad74c036a6afaedc418fed65f171c877c2f74a4c70938a03930aa11c98a20508",
+      "url": "https://raw.githubusercontent.com/google/boringssl/52bb3988e3475e37664b0dd5395af49a55d343a2/third_party/fiat/AUTHORS"
+    },
+    {
+      "path": "notices/boringssl-0.20251002.0/third_party/fiat/LICENSE",
+      "sha256": "9eacbcb81be660840c714a560a9d65ba07913db98dd4baf969f78dd499fdd60f",
+      "url": "https://raw.githubusercontent.com/google/boringssl/52bb3988e3475e37664b0dd5395af49a55d343a2/third_party/fiat/LICENSE"
+    },
+    {
+      "path": "notices/boringssl-0.20251002.0/third_party/googletest/LICENSE",
+      "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138",
+      "url": "https://raw.githubusercontent.com/google/boringssl/52bb3988e3475e37664b0dd5395af49a55d343a2/third_party/googletest/LICENSE"
+    },
+    {
+      "path": "notices/boringssl-0.20251002.0/third_party/wycheproof_testvectors/LICENSE",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+      "url": "https://raw.githubusercontent.com/google/boringssl/52bb3988e3475e37664b0dd5395af49a55d343a2/third_party/wycheproof_testvectors/LICENSE"
+    },
+    {
+      "path": "notices/brotli-1.2.0/LICENSE",
+      "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94",
+      "url": "https://raw.githubusercontent.com/google/brotli/028fb5a23661f123017c060daa546b55cf4bde29/LICENSE"
+    },
+    {
+      "path": "notices/capnp-cpp-e9fa5c7/LICENSE",
+      "sha256": "9564998c8d7f270a61a8b89869a8d17a9d5e3783b64027788b5e339ec8479e10",
+      "url": "https://raw.githubusercontent.com/capnproto/capnproto/e9fa5c7dc98192fc0dc0098ec770db68f997a938/LICENSE"
+    },
+    {
+      "path": "notices/capnp-cpp-e9fa5c7/c++/LICENSE.txt",
+      "sha256": "1e881ecf2862d01e6e5bc2b861e46886d2a6fb01499c0c508a209a7271b13cf2",
+      "url": "https://raw.githubusercontent.com/capnproto/capnproto/e9fa5c7dc98192fc0dc0098ec770db68f997a938/c++/LICENSE.txt"
+    },
+    {
+      "path": "notices/dragonbox-beeeef9/LICENSE-Apache2-LLVM",
+      "sha256": "9e45e856bedccee9f67254082ca11851d954de2fed7448c4bed19ad9aab99a91",
+      "url": "https://raw.githubusercontent.com/jk-jeon/dragonbox/beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44/LICENSE-Apache2-LLVM"
+    },
+    {
+      "path": "notices/dragonbox-beeeef9/LICENSE-Boost",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+      "url": "https://raw.githubusercontent.com/jk-jeon/dragonbox/beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44/LICENSE-Boost"
+    },
+    {
+      "path": "notices/dragonbox-beeeef9/subproject/3rdparty/shaded_plots/license.txt",
+      "sha256": "4940bc5686a12692b9f95bb3af225592994fd1bc910e212f975cc73ab3799d2c",
+      "url": "https://raw.githubusercontent.com/jk-jeon/dragonbox/beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44/subproject/3rdparty/shaded_plots/license.txt"
+    },
+    {
+      "path": "notices/fast-float-8.0.2/AUTHORS",
+      "sha256": "ed249424bce4e318fa190dd6d8becf60cfc37287132ad3f89e16e0f28d878dcf",
+      "url": "https://raw.githubusercontent.com/fastfloat/fast_float/05087a303dad9c98768b33c829d398223a649bc6/AUTHORS"
+    },
+    {
+      "path": "notices/fast-float-8.0.2/LICENSE-APACHE",
+      "sha256": "097a889aa954d04e088b790b10a4014d6189561d0a6013935a73ce3d4ddaaf06",
+      "url": "https://raw.githubusercontent.com/fastfloat/fast_float/05087a303dad9c98768b33c829d398223a649bc6/LICENSE-APACHE"
+    },
+    {
+      "path": "notices/fast-float-8.0.2/LICENSE-BOOST",
+      "sha256": "8d8291caf1cee26d23acf3eb67c9f9a2d58f1c681b16a4fbe8cbfb9e3c0b5a9b",
+      "url": "https://raw.githubusercontent.com/fastfloat/fast_float/05087a303dad9c98768b33c829d398223a649bc6/LICENSE-BOOST"
+    },
+    {
+      "path": "notices/fast-float-8.0.2/LICENSE-MIT",
+      "sha256": "e562f3f974ced7e69dd1db77b820b36bcf8f30377f1aa105723fba449c53c4e6",
+      "url": "https://raw.githubusercontent.com/fastfloat/fast_float/05087a303dad9c98768b33c829d398223a649bc6/LICENSE-MIT"
+    },
+    {
+      "path": "notices/fp16-3d2de18/LICENSE",
+      "sha256": "17e4f539024be2749ee729d1e2f01d24cef12ece8c9bf18e91a4349be29c80bf",
+      "url": "https://raw.githubusercontent.com/Maratyszcza/FP16/3d2de1816307bac63c16a297e8c4dc501b4076df/LICENSE"
+    },
+    {
+      "path": "notices/gcc-runtime-12.3.0/COPYING",
+      "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c",
+      "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/8fc1a49c9312b05d925b7d21f1d2145d70818151/COPYING"
+    },
+    {
+      "path": "notices/gcc-runtime-12.3.0/COPYING.LIB",
+      "sha256": "a9bdde5616ecdd1e980b44f360600ee8783b1f99b8cc83a2beb163a0a390e861",
+      "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/8fc1a49c9312b05d925b7d21f1d2145d70818151/COPYING.LIB"
+    },
+    {
+      "path": "notices/gcc-runtime-12.3.0/COPYING.RUNTIME",
+      "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+      "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/8fc1a49c9312b05d925b7d21f1d2145d70818151/COPYING.RUNTIME"
+    },
+    {
+      "path": "notices/gcc-runtime-12.3.0/COPYING3",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/8fc1a49c9312b05d925b7d21f1d2145d70818151/COPYING3"
+    },
+    {
+      "path": "notices/gcc-runtime-12.3.0/COPYING3.LIB",
+      "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c",
+      "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/8fc1a49c9312b05d925b7d21f1d2145d70818151/COPYING3.LIB"
+    },
+    {
+      "path": "notices/highway-1.3.0/LICENSE",
+      "sha256": "e340270d4f64384569a91d546acb5b094d69ce47f0c015db77abb74dc6f815af",
+      "url": "https://raw.githubusercontent.com/google/highway/2607d3b5b0113992fe84d3848859eae13b3b52c1/LICENSE"
+    },
+    {
+      "path": "notices/highway-1.3.0/debian/copyright",
+      "sha256": "6e4ecf1cae052b678ea3178dd4b3652d581ee66a82d58db8800dd7d80dd6de76",
+      "url": "https://raw.githubusercontent.com/google/highway/2607d3b5b0113992fe84d3848859eae13b3b52c1/debian/copyright"
+    },
+    {
+      "encoding": "base64",
+      "path": "notices/icu-ee5f27a/LICENSE",
+      "sha256": "451167c55c0fa447cc2d5632714f5e3c567fe4f1e1badefab2c1333852198aca",
+      "url": "https://chromium.googlesource.com/chromium/deps/icu/+/ee5f27adc28bd3f15b2c293f726d14d2e336cbd5/LICENSE?format=TEXT"
+    },
+    {
+      "encoding": "base64",
+      "path": "notices/icu-ee5f27a/license.html",
+      "sha256": "c62d7697c03979f5056d28b338fafc7a1152820f7b379adf4a9d88cd37160f96",
+      "url": "https://chromium.googlesource.com/chromium/deps/icu/+/ee5f27adc28bd3f15b2c293f726d14d2e336cbd5/license.html?format=TEXT"
+    },
+    {
+      "encoding": "base64",
+      "path": "notices/icu-ee5f27a/scripts/LICENSE",
+      "sha256": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+      "url": "https://chromium.googlesource.com/chromium/deps/icu/+/ee5f27adc28bd3f15b2c293f726d14d2e336cbd5/scripts/LICENSE?format=TEXT"
+    },
+    {
+      "encoding": "base64",
+      "path": "notices/llvm-libc-fe440a8/LICENSE.TXT",
+      "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47",
+      "url": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc/+/fe440a8abe663d6878686f147ef6b1a02075ae15/LICENSE.TXT?format=TEXT"
+    },
+    {
+      "path": "notices/llvm-runtime-19.1.7/compiler-rt/CREDITS.TXT",
+      "sha256": "a9901f47a089da41e4690682d00ce4cedaa2baf41fedbe79beee366d43ac2461",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/cd708029e0b2869e80abe31ddb175f7c35361f90/compiler-rt/CREDITS.TXT"
+    },
+    {
+      "path": "notices/llvm-runtime-19.1.7/compiler-rt/LICENSE.TXT",
+      "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/cd708029e0b2869e80abe31ddb175f7c35361f90/compiler-rt/LICENSE.TXT"
+    },
+    {
+      "path": "notices/llvm-runtime-19.1.7/libcxx/CREDITS.TXT",
+      "sha256": "054e099bf5954c8821b880f5751d2fbf221bf43cf7c57ac1c2c5ff6263d6d9c3",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/cd708029e0b2869e80abe31ddb175f7c35361f90/libcxx/CREDITS.TXT"
+    },
+    {
+      "path": "notices/llvm-runtime-19.1.7/libcxx/LICENSE.TXT",
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/cd708029e0b2869e80abe31ddb175f7c35361f90/libcxx/LICENSE.TXT"
+    },
+    {
+      "path": "notices/llvm-runtime-19.1.7/libcxxabi/CREDITS.TXT",
+      "sha256": "a259fff28a51623f14917dd68f97f3af7804984087ddc1bfd8196d08ebb75b83",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/cd708029e0b2869e80abe31ddb175f7c35361f90/libcxxabi/CREDITS.TXT"
+    },
+    {
+      "path": "notices/llvm-runtime-19.1.7/libcxxabi/LICENSE.TXT",
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/cd708029e0b2869e80abe31ddb175f7c35361f90/libcxxabi/LICENSE.TXT"
+    },
+    {
+      "path": "notices/llvm-runtime-19.1.7/libunwind/LICENSE.TXT",
+      "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/cd708029e0b2869e80abe31ddb175f7c35361f90/libunwind/LICENSE.TXT"
+    },
+    {
+      "path": "notices/nbytes-0.1.4/LICENSE",
+      "sha256": "782ab5b8ae1540c1a2b102fdd00990ed268d4a3a98e90ad7fe724b489d7bb0f2",
+      "url": "https://raw.githubusercontent.com/nodejs/nbytes/3e858fde1f941bf38dd0a6512e54fb13d88f344f/LICENSE"
+    },
+    {
+      "path": "notices/ncrypto-1.1.4/LICENSE",
+      "sha256": "6b44642e301e561e683a3874ac3c300780fd18f851191f988d12a144d0d482f7",
+      "url": "https://raw.githubusercontent.com/nodejs/ncrypto/027d1e44bbded3e40549d8edb0887cd783de8e5d/LICENSE"
+    },
+    {
+      "path": "notices/perfetto-56.1/LICENSE",
+      "sha256": "9a682a56cffc9524dfa9b0b1c0dca9cb81a19e96d5bd0793aaf02c08a95ee7ca",
+      "url": "https://raw.githubusercontent.com/google/perfetto/c794fceabe584dc9172e5512aaaeecc21019a635/LICENSE"
+    },
+    {
+      "path": "notices/perfetto-56.1/METADATA",
+      "sha256": "0c5e478ce932b46a4caf164ecfa3e099f2508acc701e1b567a1436f8e3c01c95",
+      "url": "https://raw.githubusercontent.com/google/perfetto/c794fceabe584dc9172e5512aaaeecc21019a635/METADATA"
+    },
+    {
+      "path": "notices/perfetto-56.1/README.chromium",
+      "sha256": "eb9573fc984cfa5f2d411c6c48a88c6033e050ef4aec210e371af405f0fbf2bf",
+      "url": "https://raw.githubusercontent.com/google/perfetto/c794fceabe584dc9172e5512aaaeecc21019a635/README.chromium"
+    },
+    {
+      "path": "notices/perfetto-56.1/python/LICENSE",
+      "sha256": "80f13607677e9932bf08e5f0bc025f8d77bde813d62bf3d5465c709025710d3d",
+      "url": "https://raw.githubusercontent.com/google/perfetto/c794fceabe584dc9172e5512aaaeecc21019a635/python/LICENSE"
+    },
+    {
+      "path": "notices/re2-2024-07-02/LICENSE",
+      "sha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449",
+      "url": "https://raw.githubusercontent.com/google/re2/6dcd83d60f7944926bfd308cc13979fc53dd69ca/LICENSE"
+    },
+    {
+      "path": "notices/re2-2024-07-02/python/LICENSE",
+      "sha256": "1e881ecf2862d01e6e5bc2b861e46886d2a6fb01499c0c508a209a7271b13cf2",
+      "url": "https://raw.githubusercontent.com/google/re2/6dcd83d60f7944926bfd308cc13979fc53dd69ca/python/LICENSE"
+    },
+    {
+      "path": "notices/simdutf-9.0.0/AUTHORS",
+      "sha256": "e9e4ace22b5bb79c2fdf3e94c139ea1a18e47fc17a30e8d977f99d95d697a1f7",
+      "url": "https://raw.githubusercontent.com/simdutf/simdutf/ca7acbcea967b5dcbab490066e99e3a6e6925539/AUTHORS"
+    },
+    {
+      "path": "notices/simdutf-9.0.0/LICENSE-APACHE",
+      "sha256": "3d34610fc6b5e1b0bfe4e2f36171c2d62c28ef05cb8d704f5a0073be41a43b3d",
+      "url": "https://raw.githubusercontent.com/simdutf/simdutf/ca7acbcea967b5dcbab490066e99e3a6e6925539/LICENSE-APACHE"
+    },
+    {
+      "path": "notices/simdutf-9.0.0/LICENSE-MIT",
+      "sha256": "fc8dbc04e03ad4efc08a647ffe7f995b811a95bc04c0e85a56d5277c6593fa5f",
+      "url": "https://raw.githubusercontent.com/simdutf/simdutf/ca7acbcea967b5dcbab490066e99e3a6e6925539/LICENSE-MIT"
+    },
+    {
+      "path": "notices/simdutf-9.0.0/benchmarks/competition/u8u16/COPYRIGHT",
+      "sha256": "c4021d0a7daf0d4fa79f43b1205e629fe0b6cb31a5998e14efbd700abf65e55f",
+      "url": "https://raw.githubusercontent.com/simdutf/simdutf/ca7acbcea967b5dcbab490066e99e3a6e6925539/benchmarks/competition/u8u16/COPYRIGHT"
+    },
+    {
+      "path": "notices/simdutf-9.0.0/benchmarks/competition/utf8lut/LICENSE",
+      "sha256": "beb8e42e9d6b4284e03304d05a81a0755200a965fc8d0a5e0aea1e84cf805d6e",
+      "url": "https://raw.githubusercontent.com/simdutf/simdutf/ca7acbcea967b5dcbab490066e99e3a6e6925539/benchmarks/competition/utf8lut/LICENSE"
+    },
+    {
+      "path": "notices/simdutf-9.0.0/benchmarks/competition/utfcpp/LICENSE",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+      "url": "https://raw.githubusercontent.com/simdutf/simdutf/ca7acbcea967b5dcbab490066e99e3a6e6925539/benchmarks/competition/utfcpp/LICENSE"
+    },
+    {
+      "archive_member": "sqlite-src-3470000/LICENSE.md",
+      "archive_sha256": "f59c349bedb470203586a6b6d10adb35f2afefa49f91e55a672a36a09a8fedf7",
+      "encoding": "zip-member",
+      "path": "notices/sqlite-3.47.0/LICENSE.md",
+      "sha256": "9c6479123f32a1ed50d9a0af203dfe8972e65035b0cdeef436b5f8d0924517fe",
+      "url": "https://sqlite.org/2024/sqlite-src-3470000.zip"
+    },
+    {
+      "archive_member": "sqlite-src-3470000/autoconf/tea/license.terms",
+      "archive_sha256": "f59c349bedb470203586a6b6d10adb35f2afefa49f91e55a672a36a09a8fedf7",
+      "encoding": "zip-member",
+      "path": "notices/sqlite-3.47.0/autoconf/tea/license.terms",
+      "sha256": "66e056b6e8687f32af30d5187611b98b12a8f46f07aaf62f43585f276e8f0ac9",
+      "url": "https://sqlite.org/2024/sqlite-src-3470000.zip"
+    },
+    {
+      "archive_member": "sqlite-src-3470000/ext/wasm/api/sqlite3-license-version-header.js",
+      "archive_sha256": "f59c349bedb470203586a6b6d10adb35f2afefa49f91e55a672a36a09a8fedf7",
+      "encoding": "zip-member",
+      "path": "notices/sqlite-3.47.0/ext/wasm/api/sqlite3-license-version-header.js",
+      "sha256": "1e2f489cf39222f715e8c92e4bf9b42281b998c65e84631947ea1184da29f512",
+      "url": "https://sqlite.org/2024/sqlite-src-3470000.zip"
+    },
+    {
+      "path": "notices/tcmalloc-0.0.0-20250927-12f2552/LICENSE",
+      "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe",
+      "url": "https://raw.githubusercontent.com/google/tcmalloc/12f255231938d30493186b0a037feedd70f5a1c1/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/AUTHORS",
+      "sha256": "fa60d5a34dff8985ccee2bbd9702cac4ce8712e1c0d7521ce00879403b0fcc27",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/AUTHORS"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/LICENSE",
+      "sha256": "6ab33af8774a0f396ee3aeeb761e3229057682d6f9fa7f572e390c2cb3a6e509",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/LICENSE.fdlibm",
+      "sha256": "e7115e18444dae09d17f361ddc365fb1d342640fe500796209c63f7c80dfae10",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/LICENSE.fdlibm"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/LICENSE.strongtalk",
+      "sha256": "6a585a9f466654abc8fc0829d56b1bc987e3a073d31faa03bba37d33640a23cd",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/LICENSE.strongtalk"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/LICENSE.v8",
+      "sha256": "4af93c12062c58058378de2397dc1c92bbff9ddfb1d583a01c84127557ce97ca",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/LICENSE.v8"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/test/js-perf-test/SixSpeed/LICENSE.sixspeed",
+      "sha256": "f915aef5cdb93903ae8850c4a1efb638ee1195b1380b6e446a583c1d0eef3ff7",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/test/js-perf-test/SixSpeed/LICENSE.sixspeed"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/test/mjsunit/third_party/object-keys/LICENSE",
+      "sha256": "b5e27ca8c92bf5748046345e3c5621a97542abd931ad5870b2057c4e20e2ece8",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/test/mjsunit/third_party/object-keys/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/test/mjsunit/third_party/regexp-pcre/LICENSE",
+      "sha256": "f55e9e4ba1ce2ae3b0f21577d9dfd3cea376123cb69e444b891f2f0fc1f9069a",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/test/mjsunit/third_party/regexp-pcre/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/test/wasm-js/third_party/LICENSE.testharness",
+      "sha256": "5a7b465d39b5e018bc40cc34162176269f7c476989cb4dbcf0ec0b81701545a7",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/test/wasm-js/third_party/LICENSE.testharness"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/colorama/LICENSE",
+      "sha256": "15137d6c822e3ab097093a33c3a39a9df699f373f6438867ad534ff60762a947",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/colorama/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/fp16/LICENSE",
+      "sha256": "c91377adafa2f498211a4fe017788e20c38892124673860f068f2919c289193d",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/fp16/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/glibc/LICENSE",
+      "sha256": "b634ab5640e258563c536e658cad87080553df6f34f62269a21d554844e58bfe",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/glibc/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/highway/LICENSE",
+      "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/highway/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/inspector_protocol/LICENSE",
+      "sha256": "450ebb9e9e50c2809d9ca581931fc8946d8d5aa0c8c35aae9ac471342fe4a88e",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/inspector_protocol/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/jsoncpp/LICENSE",
+      "sha256": "76c45ece83a26117f86f4e349e7df118708e061e87225328fb478ce1e8b3eb86",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/jsoncpp/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/rapidhash-v8/LICENSE",
+      "sha256": "db672df7faf793fbe28b8074fdd10822363e1525816b45c9627754885de842b0",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/rapidhash-v8/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/re2/LICENSE",
+      "sha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/re2/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/siphash/LICENSE",
+      "sha256": "36ffd9dc085d529a7e60e1276d73ae5a030b020313e6c5408593a6ae2af39673",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/siphash/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/utf8-decoder/LICENSE",
+      "sha256": "3f712e5fbdfdbd5ee7d9b8c8152580220df55de47f4eba2f26c95c4de19ad096",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/utf8-decoder/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/v8/builtins/LICENSE",
+      "sha256": "b9a6d9320b8f2693e8d41e496ce56caadacaddcca9be2a64a61749278f425cf2",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/v8/builtins/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/v8/codegen/LICENSE",
+      "sha256": "17e4f539024be2749ee729d1e2f01d24cef12ece8c9bf18e91a4349be29c80bf",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/v8/codegen/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/valgrind/LICENSE",
+      "sha256": "ebf25b8ce59c9e8883acd1ca75b6fc121937ca034f666c4077d2be739d2e1622",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/valgrind/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/vtune/LICENSE",
+      "sha256": "02aea3ade0c02470335987f7d93ffaed877bcefc8414a416e2e548665bb0bfd0",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/vtune/LICENSE"
+    },
+    {
+      "path": "notices/v8-15.0.245.14/third_party/wasm-api/LICENSE",
+      "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+      "url": "https://raw.githubusercontent.com/v8/v8/5297cd8b3063a95da8d0510a0b51dbda8b3fc793/third_party/wasm-api/LICENSE"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/LICENSE-APACHE",
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/LICENSE-APACHE"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/LICENSE-MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/LICENSE-MIT"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/flags/LICENSE-APACHE",
+      "sha256": "154397a08d0cb342110281129971868cd562542d0780b0d10722788cd11a1399",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/flags/LICENSE-APACHE"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/flags/LICENSE-MIT",
+      "sha256": "72af89a828df52a9dcc42512ed64663b3b8d7961dd7a5586d44478eede82bc7a",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/flags/LICENSE-MIT"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/gen/build/LICENSE-APACHE",
+      "sha256": "9cff568488e9d56aae60f162404acdb15d8533a0202cf01f6eb0843b264f20ff",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/gen/build/LICENSE-APACHE"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/gen/build/LICENSE-MIT",
+      "sha256": "94949dd83279f3ca3d0ce42ce0fc154d0ed817444454ee2925e903eec93949b6",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/gen/build/LICENSE-MIT"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/gen/cmd/LICENSE-APACHE",
+      "sha256": "9cff568488e9d56aae60f162404acdb15d8533a0202cf01f6eb0843b264f20ff",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/gen/cmd/LICENSE-APACHE"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/gen/cmd/LICENSE-MIT",
+      "sha256": "94949dd83279f3ca3d0ce42ce0fc154d0ed817444454ee2925e903eec93949b6",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/gen/cmd/LICENSE-MIT"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/gen/lib/LICENSE-APACHE",
+      "sha256": "9cff568488e9d56aae60f162404acdb15d8533a0202cf01f6eb0843b264f20ff",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/gen/lib/LICENSE-APACHE"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/gen/lib/LICENSE-MIT",
+      "sha256": "94949dd83279f3ca3d0ce42ce0fc154d0ed817444454ee2925e903eec93949b6",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/gen/lib/LICENSE-MIT"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/macro/LICENSE-APACHE",
+      "sha256": "154397a08d0cb342110281129971868cd562542d0780b0d10722788cd11a1399",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/macro/LICENSE-APACHE"
+    },
+    {
+      "path": "notices/workerd-cxx-5cb35c5/macro/LICENSE-MIT",
+      "sha256": "72af89a828df52a9dcc42512ed64663b3b8d7961dd7a5586d44478eede82bc7a",
+      "url": "https://raw.githubusercontent.com/cloudflare/workerd-cxx/5cb35c57a904f3c949b13583a66a4ae55ebb6eda/macro/LICENSE-MIT"
+    },
+    {
+      "encoding": "base64",
+      "path": "notices/zlib-8b3aa8a/LICENSE",
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/zlib/+/8b3aa8a1cd7585c0c4c67351481227b046a662a0/LICENSE?format=TEXT"
+    },
+    {
+      "path": "notices/zstd-1.5.7/COPYING",
+      "sha256": "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505",
+      "url": "https://raw.githubusercontent.com/facebook/zstd/f8745da6ff1ad1e7bab384bd1f9d742439278e99/COPYING"
+    },
+    {
+      "path": "notices/zstd-1.5.7/LICENSE",
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+      "url": "https://raw.githubusercontent.com/facebook/zstd/f8745da6ff1ad1e7bab384bd1f9d742439278e99/LICENSE"
+    },
+    {
+      "path": "notices/zstd-1.5.7/build/LICENSE",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "url": "https://raw.githubusercontent.com/facebook/zstd/f8745da6ff1ad1e7bab384bd1f9d742439278e99/build/LICENSE"
+    }
+  ],
+  "components": [
+    {
+      "license_expression": "Apache-2.0",
+      "name": "abseil-cpp",
+      "notices": [
+        "notices/abseil-cpp-20260526.0/AUTHORS",
+        "notices/abseil-cpp-20260526.0/LICENSE"
+      ],
+      "revision": "5650e9cf76d3be4318d5fa3af38ee483ddfd5e4a",
+      "source_obligation": "none-permissive",
+      "source_sha256": "6e1aee535473414164bf83e4ebc40240dec71a4701f8a642d906e95bea1aea0c",
+      "source_url": "https://github.com/abseil/abseil-cpp/releases/download/20260526.0/abseil-cpp-20260526.0.tar.gz",
+      "status": "covered",
+      "version": "20260526.0"
+    },
+    {
+      "license_expression": "Apache-2.0 OR MIT",
+      "name": "ada-url",
+      "notices": [
+        "notices/ada-url-3.4.4/LICENSE-APACHE",
+        "notices/ada-url-3.4.4/LICENSE-MIT"
+      ],
+      "revision": "8d50724a7dea209a05234a445e28f97994b0a5f6",
+      "source_obligation": "none-permissive",
+      "source_sha256": "cb0dc03516129e3bfc2c23b24bff039a01fc7ccec1a7585458c425cb57bf9fcb",
+      "source_url": "https://github.com/ada-url/ada/releases/download/v3.4.4/singleheader.zip",
+      "status": "covered",
+      "version": "3.4.4"
+    },
+    {
+      "license_expression": "LicenseRef-BoringSSL-Composite",
+      "name": "boringssl",
+      "notices": [
+        "notices/boringssl-0.20251002.0/AUTHORS",
+        "notices/boringssl-0.20251002.0/LICENSE",
+        "notices/boringssl-0.20251002.0/third_party/fiat/AUTHORS",
+        "notices/boringssl-0.20251002.0/third_party/fiat/LICENSE",
+        "notices/boringssl-0.20251002.0/third_party/googletest/LICENSE",
+        "notices/boringssl-0.20251002.0/third_party/wycheproof_testvectors/LICENSE"
+      ],
+      "revision": "52bb3988e3475e37664b0dd5395af49a55d343a2",
+      "source_obligation": "none-permissive",
+      "source_sha256": "c54bb763140d86bc13ce1ec256f02189ddb59597c9765b75f945b7401b4916a7",
+      "source_url": "https://api.github.com/repos/google/boringssl/tarball/0.20251002.0",
+      "status": "covered",
+      "version": "0.20251002.0"
+    },
+    {
+      "license_expression": "MIT",
+      "name": "brotli",
+      "notices": [
+        "notices/brotli-1.2.0/LICENSE"
+      ],
+      "revision": "028fb5a23661f123017c060daa546b55cf4bde29",
+      "source_obligation": "none-permissive",
+      "source_sha256": "816c96e8e8f193b40151dad7e8ff37b1221d019dbcb9c35cd3fadbfe6477dfec",
+      "source_url": "https://github.com/google/brotli/archive/refs/tags/v1.2.0.tar.gz",
+      "status": "covered",
+      "version": "1.2.0"
+    },
+    {
+      "license_expression": "MIT",
+      "name": "capnp-cpp",
+      "notices": [
+        "notices/capnp-cpp-e9fa5c7/LICENSE",
+        "notices/capnp-cpp-e9fa5c7/c++/LICENSE.txt"
+      ],
+      "revision": "e9fa5c7dc98192fc0dc0098ec770db68f997a938",
+      "source_obligation": "none-permissive",
+      "source_sha256": "94e5bcd03d14b8f1a1713e2477941e00b130b63b5a1aad97a10ff5edf05b6765",
+      "source_url": "https://github.com/capnproto/capnproto/tarball/e9fa5c7dc98192fc0dc0098ec770db68f997a938",
+      "status": "covered",
+      "version": "v2 commit e9fa5c7"
+    },
+    {
+      "license_expression": "(Apache-2.0 WITH LLVM-exception) OR BSL-1.0",
+      "name": "dragonbox",
+      "notices": [
+        "notices/dragonbox-beeeef9/LICENSE-Apache2-LLVM",
+        "notices/dragonbox-beeeef9/LICENSE-Boost",
+        "notices/dragonbox-beeeef9/subproject/3rdparty/shaded_plots/license.txt"
+      ],
+      "revision": "beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44",
+      "source_obligation": "none-permissive",
+      "source_sha256": "4848e8e48f39a36de2ebf67e7f5d6deb6308d4145008f56a305923d2a6df91f0",
+      "source_url": "https://github.com/jk-jeon/dragonbox/tarball/beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44",
+      "status": "covered",
+      "version": "commit beeeef9"
+    },
+    {
+      "license_expression": "Apache-2.0 OR BSL-1.0 OR MIT",
+      "name": "fast-float",
+      "notices": [
+        "notices/fast-float-8.0.2/AUTHORS",
+        "notices/fast-float-8.0.2/LICENSE-APACHE",
+        "notices/fast-float-8.0.2/LICENSE-BOOST",
+        "notices/fast-float-8.0.2/LICENSE-MIT"
+      ],
+      "revision": "05087a303dad9c98768b33c829d398223a649bc6",
+      "source_obligation": "none-permissive",
+      "source_sha256": "aa2ab8d370d1011a7a6d4ab90589b298b7e5973fe00041c06ecc7298328c25b4",
+      "source_url": "https://github.com/fastfloat/fast_float/tarball/05087a303dad9c98768b33c829d398223a649bc6",
+      "status": "covered",
+      "version": "8.0.2 / commit 05087a3"
+    },
+    {
+      "license_expression": "MIT",
+      "name": "fp16",
+      "notices": [
+        "notices/fp16-3d2de18/LICENSE"
+      ],
+      "revision": "3d2de1816307bac63c16a297e8c4dc501b4076df",
+      "source_obligation": "none-permissive",
+      "source_sha256": "81686dc45a7897cf958ee99f655879a066dde41db5fc1379a1e8db338ad17589",
+      "source_url": "https://github.com/Maratyszcza/FP16/tarball/3d2de1816307bac63c16a297e8c4dc501b4076df",
+      "status": "covered",
+      "version": "commit 3d2de18"
+    },
+    {
+      "license_expression": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "name": "gcc-runtime",
+      "notices": [
+        "notices/gcc-runtime-12.3.0/COPYING",
+        "notices/gcc-runtime-12.3.0/COPYING.LIB",
+        "notices/gcc-runtime-12.3.0/COPYING.RUNTIME",
+        "notices/gcc-runtime-12.3.0/COPYING3",
+        "notices/gcc-runtime-12.3.0/COPYING3.LIB"
+      ],
+      "revision": "8fc1a49c9312b05d925b7d21f1d2145d70818151",
+      "source_obligation": "none-gcc-runtime-exception",
+      "source_url": "https://github.com/gcc-mirror/gcc/tree/8fc1a49c9312b05d925b7d21f1d2145d70818151",
+      "status": "covered",
+      "version": "12.3.0 (Ubuntu 12.3.0-1ubuntu1~22.04.3)"
+    },
+    {
+      "license_expression": "LicenseRef-Highway-Composite",
+      "name": "highway",
+      "notices": [
+        "notices/highway-1.3.0/LICENSE",
+        "notices/highway-1.3.0/debian/copyright"
+      ],
+      "revision": "2607d3b5b0113992fe84d3848859eae13b3b52c1",
+      "source_obligation": "none-permissive",
+      "source_sha256": "4fa8749ccaf7d47c4a9e0ff635d0347eecf432901c92a131f64e30ff5094c2e9",
+      "source_url": "https://github.com/google/highway/tarball/2607d3b5b0113992fe84d3848859eae13b3b52c1",
+      "status": "covered",
+      "version": "1.3.0 / commit 2607d3b"
+    },
+    {
+      "license_expression": "Unicode-3.0",
+      "name": "icu",
+      "notices": [
+        "notices/icu-ee5f27a/LICENSE",
+        "notices/icu-ee5f27a/license.html",
+        "notices/icu-ee5f27a/scripts/LICENSE"
+      ],
+      "revision": "ee5f27adc28bd3f15b2c293f726d14d2e336cbd5",
+      "source_obligation": "none-permissive",
+      "source_url": "https://chromium.googlesource.com/chromium/deps/icu/+/ee5f27adc28bd3f15b2c293f726d14d2e336cbd5",
+      "status": "covered",
+      "version": "77 Chromium fork"
+    },
+    {
+      "license_expression": "Apache-2.0 WITH LLVM-exception",
+      "name": "llvm-libc",
+      "notices": [
+        "notices/llvm-libc-fe440a8/LICENSE.TXT"
+      ],
+      "revision": "fe440a8abe663d6878686f147ef6b1a02075ae15",
+      "source_obligation": "none-permissive",
+      "source_url": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc/+/fe440a8abe663d6878686f147ef6b1a02075ae15",
+      "status": "covered",
+      "version": "commit fe440a8"
+    },
+    {
+      "license_expression": "Apache-2.0 WITH LLVM-exception",
+      "name": "llvm-runtime",
+      "notices": [
+        "notices/llvm-runtime-19.1.7/compiler-rt/CREDITS.TXT",
+        "notices/llvm-runtime-19.1.7/compiler-rt/LICENSE.TXT",
+        "notices/llvm-runtime-19.1.7/libcxx/CREDITS.TXT",
+        "notices/llvm-runtime-19.1.7/libcxx/LICENSE.TXT",
+        "notices/llvm-runtime-19.1.7/libcxxabi/CREDITS.TXT",
+        "notices/llvm-runtime-19.1.7/libcxxabi/LICENSE.TXT",
+        "notices/llvm-runtime-19.1.7/libunwind/LICENSE.TXT"
+      ],
+      "revision": "cd708029e0b2869e80abe31ddb175f7c35361f90",
+      "source_obligation": "none-permissive",
+      "source_url": "https://github.com/llvm/llvm-project/tree/cd708029e0b2869e80abe31ddb175f7c35361f90",
+      "status": "covered",
+      "version": "19.1.7"
+    },
+    {
+      "license_expression": "MIT",
+      "name": "nbytes",
+      "notices": [
+        "notices/nbytes-0.1.4/LICENSE"
+      ],
+      "revision": "3e858fde1f941bf38dd0a6512e54fb13d88f344f",
+      "source_obligation": "none-permissive",
+      "source_sha256": "9b35ccdbdc092b8ce0b3e5645dbf8456ff4de29080d2bef4ffe21791f770f7e6",
+      "source_url": "https://api.github.com/repos/nodejs/nbytes/tarball/v0.1.4",
+      "status": "covered",
+      "version": "0.1.4"
+    },
+    {
+      "license_expression": "MIT",
+      "name": "ncrypto",
+      "notices": [
+        "notices/ncrypto-1.1.4/LICENSE"
+      ],
+      "revision": "027d1e44bbded3e40549d8edb0887cd783de8e5d",
+      "source_obligation": "none-permissive",
+      "source_sha256": "e41066de30ccb7610fd177ce59fb78a984d3298238bbf2c2cc62e17af92f8a94",
+      "source_url": "https://api.github.com/repos/nodejs/ncrypto/tarball/v1.1.4",
+      "status": "covered",
+      "version": "1.1.4"
+    },
+    {
+      "license_expression": "LicenseRef-Perfetto-Composite",
+      "name": "perfetto",
+      "notices": [
+        "notices/perfetto-56.1/LICENSE",
+        "notices/perfetto-56.1/METADATA",
+        "notices/perfetto-56.1/README.chromium",
+        "notices/perfetto-56.1/python/LICENSE"
+      ],
+      "revision": "c794fceabe584dc9172e5512aaaeecc21019a635",
+      "source_obligation": "none-permissive",
+      "source_sha256": "60dd39e5f21800c4f61032ca9f9f73973cfc7d93db9f0d39e63ad3d8fb3740e9",
+      "source_url": "https://api.github.com/repos/google/perfetto/tarball/v56.1",
+      "status": "covered",
+      "version": "56.1"
+    },
+    {
+      "license_expression": "BSD-3-Clause",
+      "name": "re2",
+      "notices": [
+        "notices/re2-2024-07-02/LICENSE",
+        "notices/re2-2024-07-02/python/LICENSE"
+      ],
+      "revision": "6dcd83d60f7944926bfd308cc13979fc53dd69ca",
+      "source_obligation": "none-permissive",
+      "source_sha256": "a835fe55fbdcd8e80f38584ab22d0840662c67f2feb36bd679402da9641dc71e",
+      "source_url": "https://github.com/google/re2/releases/download/2024-07-02/re2-2024-07-02.zip",
+      "status": "covered",
+      "version": "2024-07-02.bcr.1"
+    },
+    {
+      "license_expression": "Apache-2.0 OR MIT",
+      "name": "simdutf",
+      "notices": [
+        "notices/simdutf-9.0.0/AUTHORS",
+        "notices/simdutf-9.0.0/LICENSE-APACHE",
+        "notices/simdutf-9.0.0/LICENSE-MIT",
+        "notices/simdutf-9.0.0/benchmarks/competition/u8u16/COPYRIGHT",
+        "notices/simdutf-9.0.0/benchmarks/competition/utf8lut/LICENSE",
+        "notices/simdutf-9.0.0/benchmarks/competition/utfcpp/LICENSE"
+      ],
+      "revision": "ca7acbcea967b5dcbab490066e99e3a6e6925539",
+      "source_obligation": "none-permissive",
+      "source_sha256": "c47c68cd51025ec66509bc36215b4c4f1f0f0a98129139ee55c541531b652526",
+      "source_url": "https://github.com/simdutf/simdutf/releases/download/v9.0.0/singleheader.zip",
+      "status": "covered",
+      "version": "9.0.0"
+    },
+    {
+      "license_expression": "blessing",
+      "name": "sqlite",
+      "notices": [
+        "notices/sqlite-3.47.0/LICENSE.md",
+        "notices/sqlite-3.47.0/autoconf/tea/license.terms",
+        "notices/sqlite-3.47.0/ext/wasm/api/sqlite3-license-version-header.js"
+      ],
+      "source_obligation": "none-public-domain",
+      "source_sha256": "f59c349bedb470203586a6b6d10adb35f2afefa49f91e55a672a36a09a8fedf7",
+      "source_url": "https://sqlite.org/2024/sqlite-src-3470000.zip",
+      "status": "covered",
+      "version": "3.47.0"
+    },
+    {
+      "license_expression": "Apache-2.0",
+      "name": "tcmalloc",
+      "notices": [
+        "notices/tcmalloc-0.0.0-20250927-12f2552/LICENSE"
+      ],
+      "revision": "12f255231938d30493186b0a037feedd70f5a1c1",
+      "source_obligation": "none-permissive",
+      "source_sha256": "2a6bef88f8cccda4a63a2f4bb09e655b3ee5ea0a2ce68d16e6ea2d5f5c4be9c1",
+      "source_url": "https://github.com/google/tcmalloc/archive/12f255231938d30493186b0a037feedd70f5a1c1.tar.gz",
+      "status": "covered",
+      "version": "0.0.0-20250927-12f2552"
+    },
+    {
+      "license_expression": "LicenseRef-V8-Composite",
+      "name": "v8",
+      "notices": [
+        "notices/v8-15.0.245.14/AUTHORS",
+        "notices/v8-15.0.245.14/LICENSE",
+        "notices/v8-15.0.245.14/LICENSE.fdlibm",
+        "notices/v8-15.0.245.14/LICENSE.strongtalk",
+        "notices/v8-15.0.245.14/LICENSE.v8",
+        "notices/v8-15.0.245.14/test/js-perf-test/SixSpeed/LICENSE.sixspeed",
+        "notices/v8-15.0.245.14/test/mjsunit/third_party/object-keys/LICENSE",
+        "notices/v8-15.0.245.14/test/mjsunit/third_party/regexp-pcre/LICENSE",
+        "notices/v8-15.0.245.14/test/wasm-js/third_party/LICENSE.testharness",
+        "notices/v8-15.0.245.14/third_party/colorama/LICENSE",
+        "notices/v8-15.0.245.14/third_party/fp16/LICENSE",
+        "notices/v8-15.0.245.14/third_party/glibc/LICENSE",
+        "notices/v8-15.0.245.14/third_party/highway/LICENSE",
+        "notices/v8-15.0.245.14/third_party/inspector_protocol/LICENSE",
+        "notices/v8-15.0.245.14/third_party/jsoncpp/LICENSE",
+        "notices/v8-15.0.245.14/third_party/rapidhash-v8/LICENSE",
+        "notices/v8-15.0.245.14/third_party/re2/LICENSE",
+        "notices/v8-15.0.245.14/third_party/siphash/LICENSE",
+        "notices/v8-15.0.245.14/third_party/utf8-decoder/LICENSE",
+        "notices/v8-15.0.245.14/third_party/v8/builtins/LICENSE",
+        "notices/v8-15.0.245.14/third_party/v8/codegen/LICENSE",
+        "notices/v8-15.0.245.14/third_party/valgrind/LICENSE",
+        "notices/v8-15.0.245.14/third_party/vtune/LICENSE",
+        "notices/v8-15.0.245.14/third_party/wasm-api/LICENSE"
+      ],
+      "revision": "5297cd8b3063a95da8d0510a0b51dbda8b3fc793",
+      "source_obligation": "source-archive-locked-conservative",
+      "source_sha256": "e93c6cc3bed95f6050a2a4dd0345904390b6126814bba958400913ff02765143",
+      "source_url": "https://github.com/v8/v8/archive/refs/tags/15.0.245.14.tar.gz",
+      "status": "covered",
+      "version": "15.0.245.14"
+    },
+    {
+      "license_expression": "Apache-2.0 OR MIT",
+      "name": "workerd-cxx",
+      "notices": [
+        "notices/workerd-cxx-5cb35c5/LICENSE-APACHE",
+        "notices/workerd-cxx-5cb35c5/LICENSE-MIT",
+        "notices/workerd-cxx-5cb35c5/flags/LICENSE-APACHE",
+        "notices/workerd-cxx-5cb35c5/flags/LICENSE-MIT",
+        "notices/workerd-cxx-5cb35c5/gen/build/LICENSE-APACHE",
+        "notices/workerd-cxx-5cb35c5/gen/build/LICENSE-MIT",
+        "notices/workerd-cxx-5cb35c5/gen/cmd/LICENSE-APACHE",
+        "notices/workerd-cxx-5cb35c5/gen/cmd/LICENSE-MIT",
+        "notices/workerd-cxx-5cb35c5/gen/lib/LICENSE-APACHE",
+        "notices/workerd-cxx-5cb35c5/gen/lib/LICENSE-MIT",
+        "notices/workerd-cxx-5cb35c5/macro/LICENSE-APACHE",
+        "notices/workerd-cxx-5cb35c5/macro/LICENSE-MIT"
+      ],
+      "revision": "5cb35c57a904f3c949b13583a66a4ae55ebb6eda",
+      "source_obligation": "none-permissive",
+      "source_sha256": "d4db1075562a134a19dee7751adfc79bba95cad7740bb42d5621c4dfd78158d3",
+      "source_url": "https://github.com/cloudflare/workerd-cxx/tarball/5cb35c57a904f3c949b13583a66a4ae55ebb6eda",
+      "status": "covered",
+      "version": "commit 5cb35c5"
+    },
+    {
+      "license_expression": "Zlib",
+      "name": "zlib",
+      "notices": [
+        "notices/zlib-8b3aa8a/LICENSE"
+      ],
+      "revision": "8b3aa8a1cd7585c0c4c67351481227b046a662a0",
+      "source_obligation": "none-permissive",
+      "source_url": "https://chromium.googlesource.com/chromium/src/third_party/zlib/+/8b3aa8a1cd7585c0c4c67351481227b046a662a0",
+      "status": "covered",
+      "version": "commit 8b3aa8a"
+    },
+    {
+      "license_expression": "BSD-3-Clause OR GPL-2.0-only",
+      "name": "zstd",
+      "notices": [
+        "notices/zstd-1.5.7/COPYING",
+        "notices/zstd-1.5.7/LICENSE",
+        "notices/zstd-1.5.7/build/LICENSE"
+      ],
+      "revision": "f8745da6ff1ad1e7bab384bd1f9d742439278e99",
+      "source_obligation": "none-selected-bsd-3-clause",
+      "source_sha256": "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+      "source_url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+      "status": "covered",
+      "version": "1.5.7"
+    }
+  ],
+  "derivation_assertions": [
+    {
+      "contains": [
+        "name = \"libperfetto_client_experimental\"",
+        "\":src_base_regex_regex\""
+      ],
+      "path": "evidence/perfetto-56.1/BUILD.libperfetto_client_experimental"
+    },
+    {
+      "contains": [
+        "name = \"src_base_regex_regex\"",
+        "] + PERFETTO_CONFIG.deps.re2"
+      ],
+      "path": "evidence/perfetto-56.1/BUILD.src_base_regex_regex"
+    },
+    {
+      "contains": [
+        "bazel_dep(name = \"re2\", version = \"2024-07-02.bcr.1\")"
+      ],
+      "path": "evidence/perfetto-56.1/MODULE.bazel"
+    },
+    {
+      "contains": [
+        "name = \"perfetto_dep_sqlite\"",
+        "name = \"perfetto_dep_zlib\"",
+        "name = \"perfetto_dep_expat\""
+      ],
+      "path": "evidence/perfetto-56.1/bazel/perfetto_deps.bzl"
+    },
+    {
+      "contains": [
+        "re2 = [\"@re2//:re2\"]",
+        "protoc = [\"@com_google_protobuf//:protoc\"]"
+      ],
+      "path": "evidence/perfetto-56.1/bazel/standalone/perfetto_cfg.bzl"
+    },
+    {
+      "contains": [
+        "PERFETTO_BUILDFLAG(PERFETTO_RE2)",
+        "RegexRe2"
+      ],
+      "path": "evidence/perfetto-56.1/src/base/regex/regex.cc"
+    },
+    {
+      "contains": [
+        "#include \"re2/re2.h\"",
+        "re2::RE2"
+      ],
+      "path": "evidence/perfetto-56.1/src/base/regex/regex_re2.h"
+    },
+    {
+      "contains": [
+        "build:linux --linkopt='-l:libc++.a' --linkopt='-lm' --linkopt='-static-libgcc'",
+        "build:linux --cxxopt='-stdlib=libc++'"
+      ],
+      "path": "evidence/workerd-1.20260708.1/.bazelrc"
+    },
+    {
+      "contains": [
+        "sudo ./llvm.sh 19",
+        "libc++-19-dev",
+        "libclang-rt-19-dev"
+      ],
+      "path": "evidence/workerd-1.20260708.1/.github/actions/setup-runner/action.yml"
+    },
+    {
+      "contains": [
+        "image: ubuntu-22.04-16core",
+        "bazel-config: release_linux"
+      ],
+      "path": "evidence/workerd-1.20260708.1/.github/workflows/release.yml"
+    },
+    {
+      "contains": [
+        "sqlite-src-3470000",
+        "f59c349bedb470203586a6b6d10adb35f2afefa49f91e55a672a36a09a8fedf7"
+      ],
+      "path": "evidence/workerd-1.20260708.1/MODULE.bazel"
+    },
+    {
+      "contains": [
+        "bazel_dep(name = \"abseil-cpp\", version = \"20260526.0\")"
+      ],
+      "path": "evidence/workerd-1.20260708.1/build/deps/gen/build_deps.MODULE.bazel"
+    },
+    {
+      "contains": [
+        "bazel_dep(name = \"ada-url\", version = \"3.4.4\")",
+        "sha256 = \"c54bb763140d86bc13ce1ec256f02189ddb59597c9765b75f945b7401b4916a7\"",
+        "google-boringssl-bc2e0ff",
+        "bazel_dep(name = \"brotli\", version = \"1.2.0.bcr.1\")",
+        "sha256 = \"94e5bcd03d14b8f1a1713e2477941e00b130b63b5a1aad97a10ff5edf05b6765\"",
+        "capnproto-capnproto-e9fa5c7",
+        "sha256 = \"4848e8e48f39a36de2ebf67e7f5d6deb6308d4145008f56a305923d2a6df91f0\"",
+        "sha256 = \"aa2ab8d370d1011a7a6d4ab90589b298b7e5973fe00041c06ecc7298328c25b4\"",
+        "sha256 = \"81686dc45a7897cf958ee99f655879a066dde41db5fc1379a1e8db338ad17589\"",
+        "sha256 = \"4fa8749ccaf7d47c4a9e0ff635d0347eecf432901c92a131f64e30ff5094c2e9\"",
+        "sha256 = \"9b35ccdbdc092b8ce0b3e5645dbf8456ff4de29080d2bef4ffe21791f770f7e6\"",
+        "sha256 = \"e41066de30ccb7610fd177ce59fb78a984d3298238bbf2c2cc62e17af92f8a94\"",
+        "sha256 = \"60dd39e5f21800c4f61032ca9f9f73973cfc7d93db9f0d39e63ad3d8fb3740e9\"",
+        "google-perfetto-25e635e",
+        "sha256 = \"c47c68cd51025ec66509bc36215b4c4f1f0f0a98129139ee55c541531b652526\"",
+        "bazel_dep(name = \"tcmalloc\", version = \"0.0.0-20250927-12f2552\")",
+        "sha256 = \"d4db1075562a134a19dee7751adfc79bba95cad7740bb42d5621c4dfd78158d3\"",
+        "cloudflare-workerd-cxx-5cb35c5",
+        "commit = \"8b3aa8a1cd7585c0c4c67351481227b046a662a0\"",
+        "bazel_dep(name = \"zstd\", version = \"1.5.7.bcr.1\")"
+      ],
+      "path": "evidence/workerd-1.20260708.1/build/deps/gen/deps.MODULE.bazel"
+    },
+    {
+      "contains": [
+        "VERSION = \"15.0.245.14\"",
+        "INTEGRITY = \"sha256-6Txsw77ZX2BQoqTdA0WQQ5C2EmgUu6lYQAkT/wJ2UUM=\"",
+        "commit = \"fe440a8abe663d6878686f147ef6b1a02075ae15\"",
+        "commit = \"ee5f27adc28bd3f15b2c293f726d14d2e336cbd5\""
+      ],
+      "path": "evidence/workerd-1.20260708.1/build/deps/v8.MODULE.bazel"
+    },
+    {
+      "contains": [
+        "module(name = \"perfetto_cfg\")",
+        "bazel_dep(name = \"protobuf\", version = \"35.0\")"
+      ],
+      "path": "evidence/workerd-1.20260708.1/build/perfetto/MODULE.bazel"
+    },
+    {
+      "contains": [
+        "name = \"use_perfetto\"",
+        "build_setting_default = True",
+        "\"@perfetto//:libperfetto_client_experimental\""
+      ],
+      "path": "evidence/workerd-1.20260708.1/src/workerd/util/BUILD.bazel"
+    }
+  ],
+  "legal_gate": {
+    "basis": [
+      "Every native repository named by the exact workerd Bazel module derivation is pinned by full commit and/or source archive SHA-256.",
+      "All licence-like files in each pinned named component tree are vendored conservatively, including build/test-only notices that may not enter the binary.",
+      "The exact NPM wrapper, architecture package, and binary hashes are locked for linux-amd64 and linux-arm64.",
+      "Unstripped binary inspection found no native external-repository marker outside the named closure; dynamic dependencies are only the Debian-provided loader, libc, and libm.",
+      "No mandatory native corresponding-source obligation remains: zstd is used under BSD-3-Clause; the V8 glibc notice is conservatively included but bundled glibc trig symbols were not found and both binaries dynamically depend on libm.",
+      "The selected Perfetto client target reaches RE2; RE2 and its Abseil dependency are covered. Protobuf is used by protoc during generation and no protobuf runtime markers occur in either final binary.",
+      "Static LLVM libc++/libc++abi/compiler-rt and GCC runtime/startup obligations are explicitly covered from the exact release workflow, linker flags, toolchain comments, and binary symbols."
+    ],
+    "build_only_not_distributed": [
+      {
+        "name": "protobuf",
+        "reason": "Perfetto protoc/code-generation input; generated Perfetto protozero C++ is linked, not libprotobuf.",
+        "version": "35.0"
+      },
+      {
+        "name": "perfetto optional extension repositories",
+        "reason": "SQLite, zlib, Expat, linenoise, LLVM demangler, and OpenCSD repositories are declared by the generic Perfetto extension but are not reachable from libperfetto_client_experimental. Direct workerd SQLite/zlib are separately covered.",
+        "version": "Perfetto 56.1 locks"
+      }
+    ],
+    "dynamic_and_startup_obligations": {
+      "gcc-static-runtime": {
+        "basis": "Release .bazelrc uses -static-libgcc and binary .comment identifies Ubuntu GCC 12.3.0; GCC Runtime Library Exception removes corresponding-source obligation for eligible compilation.",
+        "coverage": "native component gcc-runtime 12.3.0"
+      },
+      "glibc-startup": {
+        "basis": "The PIE startup path calls dynamic __libc_start_main; no separately linked glibc library is hidden from NEEDED.",
+        "coverage": "container-wide Debian notice/source lock plus glibc startup-file exception"
+      },
+      "libc-libm-loader": {
+        "basis": "The only dynamic NEEDED libraries are the platform loader, libc, and libm from the final Debian image.",
+        "coverage": "container-wide Debian notice and corresponding-source lock"
+      },
+      "llvm-static-runtime": {
+        "basis": "Release setup installs LLVM 19 libc++/compiler-rt and .bazelrc statically links libc++.a; binary paths identify libcxxabi.",
+        "coverage": "native component llvm-runtime 19.1.7"
+      }
+    },
+    "license_tree_audits": {
+      "gcc-runtime": {
+        "legal_like_files": [
+          "COPYING",
+          "COPYING.LIB",
+          "COPYING.RUNTIME",
+          "COPYING3",
+          "COPYING3.LIB"
+        ],
+        "libgcc_additional_legal_like_files": [],
+        "libgcc_tree_sha": "7bbe754d8041096908cc3ad23d239e7d1f651db4",
+        "scope": "Complete root COPYING family plus a recursive legal-filename scan of the selected libgcc runtime subtree.",
+        "tree_sha": "2d179124ce42db58e4341281c094f102ddd6d30b"
+      },
+      "llvm-runtime": {
+        "legal_like_files": [
+          "compiler-rt/CREDITS.TXT",
+          "compiler-rt/LICENSE.TXT",
+          "libcxx/CREDITS.TXT",
+          "libcxx/LICENSE.TXT",
+          "libcxxabi/CREDITS.TXT",
+          "libcxxabi/LICENSE.TXT",
+          "libunwind/LICENSE.TXT"
+        ],
+        "scope": "Recursive legal-filename scans of the four selected linked LLVM runtime subtrees, not unrelated llvm-project tools.",
+        "subtree_shas": {
+          "compiler-rt": "ec9dfb9909997011cbdc7c4f496fc90f79e2a46a",
+          "libcxx": "7bcf87ad3b5284406c816d9038759dddb5ef5bfe",
+          "libcxxabi": "c3aa69d7f2e91b7f5d70c403e91aefb01ff44be3",
+          "libunwind": "d5269f75a5dd964b1a64554d20c73b443f7b09da"
+        },
+        "tree_sha": "59c674c18e0bb2fe82680dc1a1c397657c0050b2"
+      },
+      "perfetto": {
+        "additional_legal_metadata": [
+          "METADATA",
+          "README.chromium"
+        ],
+        "legal_like_files": [
+          "LICENSE",
+          "python/LICENSE"
+        ],
+        "scope": "Recursive legal-filename scan of the complete pinned Perfetto repository tree.",
+        "tree_sha": "b90b6017510d687367d7ea3d7cdc109d4b429b39"
+      },
+      "re2": {
+        "legal_like_files": [
+          "LICENSE",
+          "python/LICENSE"
+        ],
+        "scope": "Recursive legal-filename scan of the complete pinned RE2 repository tree.",
+        "tree_sha": "7422b5ab1f79bfe58b958873ff02db50141afd9a"
+      }
+    },
+    "dynamic_library_owner": "Debian dpkg source/notices inventory outside this native workerd bundle",
+    "status": "covered"
+  },
+  "residual_limitations": [
+    {
+      "category": "supply-chain-evidence",
+      "detail": "The NPM release has no signed native SBOM or reproducible-build attestation. Downstream evidence binds the exact release workflow, linker flags, LLVM/GCC toolchain, direct Bazel sources, package hashes, and binary markers, but Cloudflare does not sign that assembled closure.",
+      "effect": "Does not identify a missing notice or corresponding-source obligation; retained as uncertainty about upstream binary provenance/feature attestation.",
+      "id": "upstream-binary-native-closure-attestation",
+      "mitigation": "Self-build workerd from the pinned source with a captured Bazel cquery/aquery closure, reproduce the released binary, or obtain signed upstream provenance and reconcile it to this lock."
+    },
+    {
+      "category": "supply-chain-evidence",
+      "detail": "The upstream NPM release does not publish a machine-verifiable configured Bazel closure. The pinned source graph was reviewed through workerd -> libperfetto_client_experimental -> src_base_regex_regex -> RE2, and the selected native repositories are covered, but this remains independent downstream evidence.",
+      "effect": "Does not identify a missing notice or source obligation; it records that the reviewed V8/Perfetto target-closure evidence is downstream rather than an upstream-signed attestation.",
+      "id": "v8-perfetto-feature-closure-attestation",
+      "mitigation": "Capture the exact configured Bazel target closure and add every external runtime repository, notice, and source digest before closing this evidence limitation."
+    }
+  ],
+  "schema_version": 1,
+  "scope": "Conservative native C/C++ dependency notice inventory for the published workerd 1.20260708.1 Linux binaries. Rust crates are intentionally excluded and inventoried separately.",
+  "unresolved": [],
+  "workerd": {
+    "architectures": {
+      "linux-amd64": {
+        "binary_sha256": "a74a07d8003e5ea018d4fe4c4746c70e38b73aa5d5add97747a959991bd3e000",
+        "package_sha256": "18d805cbf10043dabbff30ef57bc83a8fc8524ea666fa3827dafe9b3dee83d58"
+      },
+      "linux-arm64": {
+        "binary_sha256": "2193c2ed64e76fe0a7bf0fb3d6e6eb128ada19198913459fb2a1eafcfdfa9814",
+        "package_sha256": "8e89f4d3c16f3fa38d659d5c1fc21b9ffc66d99b2bd72f154f2ef3495bf5fb63"
+      }
+    },
+    "commit": "99057e45cb7152cc5efc59b8d2182386fe1e3eec",
+    "npm_integrity": "sha512-WAK+Kt/VVCSldH2qSr8lx46XCJ4Q+bdlHNaFqUtOHthBEIB8C1N8HVW+VOLrxDoTCk0NGNv0zajnBeQK4JOB9w==",
+    "npm_wrapper_sha256": "c8e89aac2b68f07063af5dff670b4e5726b3889d4f3957da7a2ce012d0c804bc",
+    "version": "1.20260708.1"
+  }
+}

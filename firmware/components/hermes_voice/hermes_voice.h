@@ -5,8 +5,10 @@
 
 #include "esphome/components/micro_wake_word/micro_wake_word.h"
 #include "esphome/components/microphone/microphone_source.h"
+#include "esphome/components/ota/ota_backend.h"
 #include "esphome/components/ring_buffer/ring_buffer.h"
 #include "esphome/components/speaker/speaker.h"
+#include "esphome/components/time/real_time_clock.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/core/static_task.h"
@@ -58,6 +60,7 @@ enum class InboundEventType : uint8_t {
 
 struct InboundEvent {
   InboundEventType type{InboundEventType::READY};
+  uint32_t transport_epoch{0};
   uint64_t turn_id{0};
   uint64_t request_id{0};
   uint32_t sequence{UINT32_MAX};
@@ -78,13 +81,21 @@ struct OutputFrameCredit {
   uint32_t remaining_bytes{0};
 };
 
-class HermesVoice : public Component {
+class HermesVoice : public Component
+#ifdef USE_OTA_STATE_LISTENER
+    ,
+                    public ota::OTAGlobalStateListener
+#endif
+{
  public:
   void setup() override;
   void loop() override;
   void dump_config() override;
   void on_shutdown() override;
   float get_setup_priority() const override;
+#ifdef USE_OTA_STATE_LISTENER
+  void on_ota_global_state(ota::OTAState state, float progress, uint8_t error, ota::OTAComponent *component) override;
+#endif
 
   void start();
   void stop();
@@ -94,17 +105,24 @@ class HermesVoice : public Component {
   // of the BLE/Improv recovery window without changing conversation state.
   void resume_transport();
   void suspend_transport();
+  bool is_transport_suspended() const {
+    return !this->transport_started_.load(std::memory_order_acquire) &&
+           this->transport_quiesced_.load(std::memory_order_acquire);
+  }
   bool is_running() const { return this->state_ != State::IDLE; }
   bool is_configured() const { return this->configured_; }
   bool is_ready() const {
     return this->configured_ && this->websocket_connected_.load(std::memory_order_acquire) &&
            this->protocol_ready_.load(std::memory_order_acquire) &&
+           this->tls_time_valid_.load(std::memory_order_acquire) &&
+           !this->ota_active_.load(std::memory_order_acquire) &&
            !this->conversation_reset_pending_.load(std::memory_order_acquire);
   }
   const std::string &get_device_id() const { return this->device_id_; }
 
   void set_microphone_source(microphone::MicrophoneSource *source) { this->microphone_source_ = source; }
   void set_speaker(speaker::Speaker *speaker) { this->speaker_ = speaker; }
+  void set_time_source(time::RealTimeClock *time_source) { this->time_source_ = time_source; }
   void set_micro_wake_word(micro_wake_word::MicroWakeWord *mww) { this->micro_wake_word_ = mww; }
   void set_gateway_url(const std::string &value) { this->gateway_url_ = value; }
   void set_auth_token(const std::string &value) { this->auth_token_ = value; }
@@ -134,6 +152,7 @@ class HermesVoice : public Component {
   static constexpr uint8_t INPUT_BITS_PER_SAMPLE = 16;
   static constexpr size_t AUDIO_FRAME_BYTES = 2048;  // 64 ms PCM16/16 kHz mono
   static constexpr uint32_t AUDIO_FRAME_DURATION_MS = 64;
+  static constexpr uint32_t MAX_RECORDING_DURATION_LIMIT_MS = 30000;
   // Holds the complete configured 30 s capture while per-turn STT performs
   // bounded recovery/connect/session startup. Audio still drains in realtime
   // as soon as turn.ready arrives; this is a cold-start safety bound in PSRAM.
@@ -153,6 +172,15 @@ class HermesVoice : public Component {
   static constexpr uint32_t ACK_EVERY_FRAMES = 4;
   static constexpr uint32_t RECONNECT_INITIAL_DELAY_MS = 1000;
   static constexpr uint32_t RECONNECT_MAX_DELAY_MS = 300000;
+  static constexpr uint32_t HANDSHAKE_TIMEOUT_MS = 10000;
+  static constexpr uint32_t READY_STABLE_DURATION_MS = 30000;
+  static constexpr uint32_t RESET_ACK_TIMEOUT_MS = 5000;
+  static constexpr uint8_t RESET_MAX_ATTEMPTS = 3;
+  static constexpr uint32_t TRANSPORT_STOP_WAIT_MS = 2500;
+  static_assert(INPUT_RING_BYTES >= (MAX_RECORDING_DURATION_LIMIT_MS * INPUT_SAMPLE_RATE * sizeof(int16_t)) / 1000,
+                "Input ring must hold the maximum recording duration");
+  static_assert(OUTPUT_RING_BYTES >= OUTPUT_WINDOW_FRAMES * AUDIO_FRAME_BYTES,
+                "Output ring must hold a complete negotiated output window");
 
   void set_state_(State state);
   void begin_capture_();
@@ -162,19 +190,26 @@ class HermesVoice : public Component {
   void return_to_idle_();
   void set_error_(const char *code, const char *message);
   void cancel_active_turn_(const char *reason);
-  void reset_turn_state_(bool preserve_input);
+  bool reset_turn_state_(bool preserve_input);
+  bool reset_input_audio_();
+  bool try_enter_microphone_callback_();
+  void set_microphone_callbacks_enabled_(bool enabled);
   void handle_microphone_data_(const std::vector<uint8_t> &data);
   void process_inbound_events_();
   void service_playback_();
   void clear_output_audio_();
   void request_realtime_wifi_();
   void release_realtime_wifi_();
+  void prepare_for_ota_();
+  void recover_from_ota_();
 
   bool initialize_websocket_();
-  bool start_websocket_task_();
-  bool restart_websocket_();
-  void schedule_start_retry_(uint32_t now);
-  void service_start_retry_(uint32_t now);
+  bool start_transport_epoch_();
+  void stop_transport_epoch_();
+  void request_transport_restart_();
+  void reset_transport_epoch_state_();
+  void cleanup_resources_();
+  void notify_sender_();
   static void websocket_event_handler_(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data);
   void handle_websocket_event_(int32_t event_id, esp_websocket_event_data_t *event);
   void handle_websocket_data_(const esp_websocket_event_data_t *event);
@@ -200,6 +235,7 @@ class HermesVoice : public Component {
 
   microphone::MicrophoneSource *microphone_source_{nullptr};
   speaker::Speaker *speaker_{nullptr};
+  time::RealTimeClock *time_source_{nullptr};
   micro_wake_word::MicroWakeWord *micro_wake_word_{nullptr};
 
   std::string gateway_url_;
@@ -222,13 +258,12 @@ class HermesVoice : public Component {
   uint32_t state_started_ms_{0};
   uint32_t capture_started_ms_{0};
   uint32_t turn_started_ms_{0};
-  uint32_t playback_ended_ms_{0};
+  uint32_t playback_drain_started_ms_{0};
   bool speech_start_triggered_{false};
   bool replying_triggered_{false};
   bool speaker_finish_requested_{false};
   bool realtime_wifi_requested_{false};
   bool remote_turn_done_{false};
-  bool response_started_{false};
   bool tts_started_{false};
   bool tts_ended_{false};
 
@@ -241,6 +276,7 @@ class HermesVoice : public Component {
   QueueHandle_t outbound_queue_{nullptr};
   QueueHandle_t inbound_queue_{nullptr};
   QueueHandle_t output_credit_queue_{nullptr};
+  SemaphoreHandle_t input_buffer_mutex_{nullptr};
   SemaphoreHandle_t output_buffer_mutex_{nullptr};
   StaticTask sender_task_;
   esp_websocket_client_handle_t websocket_{nullptr};
@@ -249,9 +285,13 @@ class HermesVoice : public Component {
   size_t inbound_message_size_{0};
   uint8_t inbound_message_opcode_{0};
   bool inbound_message_active_{false};
+  size_t inbound_frame_size_{0};
+  size_t inbound_frame_offset_{0};
+  uint8_t inbound_frame_opcode_{0};
   uint64_t output_validation_turn_id_{0};
   uint32_t expected_output_sequence_{0};
   uint32_t expected_output_sample_{0};
+  bool output_short_frame_seen_{false};
   OutputFrameCredit output_credit_current_{};
   bool output_credit_current_valid_{false};
 
@@ -261,26 +301,42 @@ class HermesVoice : public Component {
   uint64_t conversation_reset_request_id_{0};
 
   std::atomic<bool> shutting_down_{false};
+  std::atomic<bool> shutdown_complete_{false};
+  std::atomic<bool> ota_active_{false};
+  std::atomic<bool> transport_allowed_before_ota_{false};
+  std::atomic<bool> tls_time_valid_{false};
   std::atomic<bool> websocket_connected_{false};
   std::atomic<bool> protocol_ready_{false};
   std::atomic<bool> hello_pending_{false};
   std::atomic<bool> connection_lost_{false};
   std::atomic<bool> transport_allowed_{false};
   std::atomic<bool> transport_started_{false};
-  std::atomic<bool> start_retry_requested_{false};
+  std::atomic<bool> transport_quiesced_{true};
+  std::atomic<bool> transport_restart_requested_{false};
+  std::atomic<uint32_t> transport_stop_started_ms_{0};
+  std::atomic<bool> transport_stop_reboot_requested_{false};
+  std::atomic<uint32_t> transport_epoch_{0};
+  std::atomic<uint32_t> connected_epoch_{0};
+  std::atomic<uint32_t> connected_started_ms_{0};
+  std::atomic<uint32_t> hello_sent_ms_{0};
+  std::atomic<uint32_t> protocol_ready_since_ms_{0};
   std::atomic<uint32_t> reconnect_base_delay_ms_{RECONNECT_INITIAL_DELAY_MS};
   std::atomic<bool> send_failed_{false};
   std::atomic<bool> protocol_error_{false};
+  std::atomic<bool> handshake_timeout_{false};
   std::atomic<bool> conversation_reset_pending_{false};
   std::atomic<bool> conversation_reset_send_requested_{false};
-
-  bool start_retry_pending_{false};
-  uint32_t start_retry_at_ms_{0};
+  std::atomic<uint32_t> conversation_reset_sent_ms_{0};
+  std::atomic<uint8_t> conversation_reset_attempts_{0};
 
   std::atomic<bool> turn_active_{false};
   std::atomic<bool> turn_start_requested_{false};
   std::atomic<bool> turn_ready_{false};
   std::atomic<bool> capturing_{false};
+  std::atomic<uint32_t> input_generation_{0};
+  std::atomic<uint32_t> capture_generation_{0};
+  portMUX_TYPE microphone_callback_mux_ = portMUX_INITIALIZER_UNLOCKED;
+  bool microphone_callbacks_enabled_{false};
   std::atomic<uint32_t> microphone_callbacks_inflight_{0};
   std::atomic<bool> commit_requested_{false};
   std::atomic<bool> commit_sent_{false};
@@ -290,7 +346,6 @@ class HermesVoice : public Component {
 
   std::atomic<bool> speech_seen_{false};
   std::atomic<uint32_t> last_voice_ms_{0};
-  std::atomic<uint32_t> captured_samples_{0};
   std::atomic<bool> input_buffer_overflow_{false};
   std::atomic<bool> output_buffer_overflow_{false};
   std::atomic<uint32_t> sent_input_count_{0};

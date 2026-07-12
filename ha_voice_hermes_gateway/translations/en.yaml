@@ -1,0 +1,91 @@
+configuration:
+  certfile:
+    name: TLS certificate chain
+    description: Relative path under /ssl; defaults to fullchain.pem. The Voice PE requires a public CA and a SAN matching its WSS hostname.
+  keyfile:
+    name: TLS private key
+    description: Relative path under /ssl; defaults to privkey.pem. Keep the key permissions restricted.
+  allow_private_upstreams:
+    name: Allow private upstreams
+    description: Expands all gateway egress to private network ranges (loopback remains denied) so a private HTTPS Hermes origin can resolve. Leave disabled for public origins.
+  certificate_poll_seconds:
+    name: Certificate check interval
+    description: Seconds between certificate/key change checks. A change restarts the runtime and Voice PEs reconnect.
+  hermes_base_url:
+    name: Hermes HTTPS base URL
+    description: HTTPS origin of the selected Hermes API/profile. Local HTTP and credentials in URLs are rejected.
+  hermes_api_key:
+    name: Hermes API key
+    description: Dedicated bearer for the voice-safe Hermes API profile.
+  hermes_model:
+    name: Hermes model label
+    description: Responses API model/route label. The base URL and API key select the actual Hermes profile.
+  hermes_profile_id:
+    name: Hermes profile ID
+    description: Stable operator-assigned identity for the selected Hermes SOUL, tools, sandbox, and memory policy.
+  hermes_binding_revision:
+    name: Hermes binding revision
+    description: Increment when the selected profile's behavior or voice instructions change; this fences the old response chain.
+  hermes_voice_instructions:
+    name: Hermes voice instructions
+    description: Optional spoken-answer instructions. Treat customized content as sensitive.
+  cf_access_client_id:
+    name: Cloudflare Access client ID
+    description: Optional service-token ID for a Hermes origin behind Access. Configure both Access fields or neither.
+  cf_access_client_secret:
+    name: Cloudflare Access client secret
+    description: Optional matching Access service-token secret. Configure both Access fields or neither.
+  elevenlabs_api_key:
+    name: ElevenLabs API key
+    description: Dedicated least-privilege key used for realtime Scribe STT and streaming TTS.
+  elevenlabs_voice_id:
+    name: ElevenLabs voice ID
+    description: Voice used to synthesize Hermes replies.
+  realtime_stt_model:
+    name: Realtime STT model
+    description: ElevenLabs realtime transcription model; the supported default is scribe_v2_realtime.
+  tts_model:
+    name: Realtime TTS model
+    description: ElevenLabs multi-context streaming model; the supported default is eleven_flash_v2_5.
+  elevenlabs_enable_logging:
+    name: ElevenLabs provider logging
+    description: Disable only if the ElevenLabs account is eligible for Zero Retention Mode and requests have been verified.
+  stt_language_code:
+    name: STT language hint
+    description: Optional language code. Leave empty for provider automatic detection.
+  conversation_idle_seconds:
+    name: Conversation idle boundary
+    description: Seconds of inactivity before starting a new short-term Hermes response chain. Default 900.
+  realtime_max_audio_seconds:
+    name: Maximum turn audio
+    description: Hard maximum microphone duration in seconds for one realtime turn.
+  realtime_max_output_seconds:
+    name: Maximum spoken output
+    description: Hard maximum decoded PCM duration in seconds for one realtime reply.
+  max_connection_audio_seconds:
+    name: Connection audio allowance
+    description: Cumulative audio seconds allowed per socket and per-device durable 24-hour window.
+  max_turns_per_connection:
+    name: Connection turn allowance
+    description: Attempted turns allowed per socket and per-device durable 24-hour window.
+  max_messages_per_connection:
+    name: Connection message allowance
+    description: Application messages allowed per socket and per-device durable 24-hour window.
+  diagnostic_v1_enabled:
+    name: Enable buffered v1 diagnostic
+    description: Exposes a stateless buffered operator diagnostic. It is not a conversation transport or realtime fallback.
+  devices:
+    name: Voice PE devices
+    description: Every device needs its hardware Hermes Device ID, a unique random bearer, and an explicit long-term-memory scope.
+    fields:
+      device_id:
+        name: Hermes Device ID
+        description: Exact hardware-derived ID shown by the Voice PE, normally voice-pe followed by its Wi-Fi MAC.
+      device_token:
+        name: Device gateway token
+        description: Unique random token for this physical unit; generate at least 32 random bytes and never reuse it.
+      hermes_session_key:
+        name: Hermes memory scope
+        description: Explicit X-Hermes-Session-Key for this device. Reuse only when intentional long-term memory sharing is desired.
+network:
+  8443/tcp: Voice PE realtime WSS and redacted HTTPS health endpoint

@@ -1,0 +1,467 @@
+load("@bazel_skylib//lib:selects.bzl", "selects")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("//:build/kj_test.bzl", "kj_test")
+load("//:build/wd_cc_library.bzl", "wd_cc_library")
+
+bool_flag(
+    name = "use_perfetto",
+    build_setting_default = True,
+)
+
+config_setting(
+    name = "set_use_perfetto",
+    flag_values = {"use_perfetto": "True"},
+)
+
+selects.config_setting_group(
+    name = "really_use_perfetto",
+    match_all = [
+        ":set_use_perfetto",
+        "//:is_unix",
+    ],
+)
+
+wd_cc_library(
+    name = "perfetto",
+    srcs = ["perfetto-tracing.c++"],
+    hdrs = [
+        "perfetto-tracing.h",
+        "use-perfetto-categories.h",
+    ],
+    # HACK: We do not use the perfetto IPC system backend in any capacity. If perfetto-tracing.c++
+    # is able to inline and optimize its perfetto::Tracing::Initialize() call properly, there are no
+    # references to it anywhere in workerd and the linker can optimize it away, reducing binary
+    # sizes. Enable optimization unconditionally here so that the backend goes away.
+    # See perfetto's include/perfetto/tracing/tracing.h for more context.
+    # Alternatively, we could create an override for perfetto_build_flags.h to disable the
+    # PERFETTO_IPC and PERFETTO_SYSTEM_CONSUMER defines which also exist to facilitate link-time
+    # code elimination, but doing so results in a smaller size improvement than enabling
+    # optimization here, or no additional improvement when doing combined with enabling
+    # optimization.
+    copts = select({
+        "@platforms//os:windows": [
+            "/O2",
+            "/clang:-O3",
+        ],
+        "//conditions:default": ["-O3"],
+    }),
+    defines = select({
+        ":really_use_perfetto": ["WORKERD_USE_PERFETTO"],
+        "//conditions:default": [],
+    }),
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj",
+    ] + select({
+        ":really_use_perfetto": ["@perfetto//:libperfetto_client_experimental"],
+        "//conditions:default": [],
+    }),
+)
+# TODO(later): Currently perfetto support is not enabled on Windows simply because the
+# perfetto bazel build fails on windows for some reason and it's currently not worth
+# the time to invest of figuring out why. If some intrepid soul wishes to figure out
+# why the Windows build is failing, we could simplify things here a bit.
+
+wd_cc_library(
+    name = "util",
+    srcs = [
+        "stream-utils.c++",
+        "wait-list.c++",
+    ],
+    # This is verbose, but allows us to be intentional about what we include here and e.g. avoid
+    # accidentally including test headers or having targets depend on more than they need to.
+    # TODO (cleanup): Break this up entirely.
+    hdrs = [
+        "abortable.h",
+        "batch-queue.h",
+        "canceler.h",
+        "color-util.h",
+        "http-util.h",
+        "stream-utils.h",
+        "uncaught-exception-source.h",
+        "wait-list.h",
+        "weak-refs.h",
+        "xthreadnotifier.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":duration-exceeded-logger",
+        "@capnp-cpp//src/kj",
+        "@capnp-cpp//src/kj:kj-async",
+        # TODO(cleanup): Only for abortable.h, factor out
+        "@capnp-cpp//src/kj/compat:kj-http",
+    ],
+)
+
+wd_cc_library(
+    name = "consume",
+    hdrs = ["consume.h"],
+    visibility = ["//visibility:public"],
+    deps = ["@capnp-cpp//src/kj"],
+)
+
+wd_cc_library(
+    name = "checked-queue",
+    hdrs = ["checked-queue.h"],
+    visibility = ["//visibility:public"],
+    deps = ["@capnp-cpp//src/kj"],
+)
+
+wd_cc_library(
+    name = "ring-buffer",
+    hdrs = ["ring-buffer.h"],
+    visibility = ["//visibility:public"],
+    deps = ["@capnp-cpp//src/kj"],
+)
+
+wd_cc_library(
+    name = "small-weak-vector",
+    hdrs = ["small-weak-vector.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj",
+    ],
+)
+
+wd_cc_library(
+    name = "mimetype",
+    srcs = ["mimetype.c++"],
+    hdrs = ["mimetype.h"],
+    implementation_deps = [
+        ":string-buffer",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":strings",
+        "//src/workerd/jsg:memory-tracker",
+        "@capnp-cpp//src/kj",
+        "@capnp-cpp//src/kj:kj-async",
+    ],
+)
+
+wd_cc_library(
+    name = "strings",
+    srcs = ["strings.c++"],
+    hdrs = ["strings.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj",
+    ],
+)
+
+wd_cc_library(
+    name = "string-buffer",
+    hdrs = ["string-buffer.h"],
+    visibility = ["//visibility:public"],
+    deps = [":strings"],
+)
+
+wd_cc_library(
+    name = "strong-bool",
+    hdrs = ["strong-bool.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj",
+    ],
+)
+
+wd_cc_library(
+    name = "uuid",
+    srcs = ["uuid.c++"],
+    hdrs = ["uuid.h"],
+    implementation_deps = [
+        ":entropy",
+        "@capnp-cpp//src/kj/compat:kj-http",
+        "@ssl",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj",
+    ],
+)
+
+wd_cc_library(
+    name = "test",
+    hdrs = ["test.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj:kj-test",
+    ],
+)
+
+wd_cc_library(
+    name = "account-limits",
+    hdrs = ["account-limits.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj",
+    ],
+)
+
+wd_cc_library(
+    name = "sqlite",
+    srcs = [
+        "sqlite.c++",
+        "sqlite-kv.c++",
+        "sqlite-metadata.c++",
+    ],
+    hdrs = [
+        "sqlite.h",
+        "sqlite-kv.h",
+        "sqlite-metadata.h",
+    ],
+    implementation_deps = [
+        ":autogate",
+        "//src/workerd/jsg:exception",
+        "@sqlite3",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":account-limits",
+        ":sentry",
+        ":sqlite-metering",
+        "@capnp-cpp//src/kj:kj-async",
+    ],
+)
+
+wd_cc_library(
+    name = "sqlite-metering",
+    srcs = ["sqlite-metering.c++"],
+    hdrs = ["sqlite-metering.h"],
+    implementation_deps = [
+        "@sqlite3",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj",
+    ],
+)
+
+wd_cc_library(
+    name = "test-util",
+    testonly = True,
+    srcs = ["capnp-mock.c++"],
+    hdrs = ["capnp-mock.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/capnp:capnpc",
+    ],
+)
+
+wd_cc_library(
+    name = "own-util",
+    hdrs = ["own-util.h"],
+    visibility = ["//visibility:public"],
+    deps = ["@capnp-cpp//src/kj"],
+)
+
+wd_cc_library(
+    name = "sentry",
+    srcs = ["sentry.c++"],
+    hdrs = ["sentry.h"],
+    implementation_deps = [
+        ":entropy",
+        ":thread-scopes",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj",
+    ],
+)
+
+wd_cc_library(
+    name = "thread-scopes",
+    srcs = ["thread-scopes.c++"],
+    hdrs = ["thread-scopes.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj/compat:kj-http",
+    ],
+)
+
+wd_cc_library(
+    name = "autogate",
+    srcs = ["autogate.c++"],
+    hdrs = ["autogate.h"],
+    # Make missing string repr for an autogate into a hard error
+    copts = ["-Werror=switch"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":sentry",
+        ":strong-bool",
+        "@capnp-cpp//src/capnp",
+        "@capnp-cpp//src/kj",
+    ],
+)
+
+wd_cc_library(
+    name = "duration-exceeded-logger",
+    hdrs = ["duration-exceeded-logger.h"],
+    visibility = ["//visibility:public"],
+    deps = ["@capnp-cpp//src/kj"],
+)
+
+wd_cc_library(
+    name = "entropy",
+    srcs = ["entropy.c++"],
+    hdrs = ["entropy.h"],
+    implementation_deps = [
+        "@ncrypto",
+        "@ssl",
+    ],
+    visibility = ["//visibility:public"],
+    deps = ["@capnp-cpp//src/kj"],
+)
+
+wd_cc_library(
+    name = "completion-membrane",
+    hdrs = ["completion-membrane.h"],
+    visibility = ["//visibility:public"],
+    deps = ["@capnp-cpp//src/capnp"],
+)
+
+wd_cc_library(
+    name = "exception",
+    hdrs = ["exception.h"],
+    visibility = ["//visibility:public"],
+    deps = ["@capnp-cpp//src/kj"],
+)
+
+wd_cc_library(
+    name = "immediate-crash",
+    hdrs = ["immediate-crash.h"],
+    visibility = ["//visibility:public"],
+)
+
+wd_cc_library(
+    name = "header-validation",
+    hdrs = ["header-validation.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj",
+    ],
+)
+
+wd_cc_library(
+    name = "websocket-error-handler",
+    srcs = ["websocket-error-handler.c++"],
+    hdrs = ["websocket-error-handler.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/workerd/jsg:exception",
+        "@capnp-cpp//src/kj/compat:kj-http",
+    ],
+)
+
+exports_files(["autogate.h"])
+
+[
+    kj_test(
+        src = f,
+        deps = [
+            ":util",
+        ],
+    )
+    for f in [
+        "batch-queue-test.c++",
+        "wait-list-test.c++",
+        "duration-exceeded-logger-test.c++",
+    ]
+]
+
+kj_test(
+    src = "string-buffer-test.c++",
+    deps = [
+        ":string-buffer",
+    ],
+)
+
+kj_test(
+    src = "strong-bool-test.c++",
+    deps = [
+        ":strong-bool",
+    ],
+)
+
+kj_test(
+    src = "mimetype-test.c++",
+    deps = [
+        ":mimetype",
+    ],
+)
+
+kj_test(
+    size = "large",
+    src = "sqlite-test.c++",
+    deps = [
+        ":sqlite",
+        "//src/workerd/io:io-gate",
+        "@sqlite3",
+    ],
+)
+
+kj_test(
+    src = "sqlite-kv-test.c++",
+    deps = [
+        ":sqlite",
+    ],
+)
+
+kj_test(
+    src = "sqlite-metadata-test.c++",
+    deps = [
+        ":sqlite",
+    ],
+)
+
+kj_test(
+    src = "sqlite-metering-test.c++",
+    deps = [
+        ":sqlite-metering",
+        "@capnp-cpp//src/kj",
+    ],
+)
+
+kj_test(
+    src = "test-test.c++",
+    deps = [
+        ":test",
+    ],
+)
+
+kj_test(
+    src = "uuid-test.c++",
+    deps = [
+        ":uuid",
+    ],
+)
+
+kj_test(
+    src = "checked-queue-test.c++",
+    deps = [":checked-queue"],
+)
+
+kj_test(
+    src = "ring-buffer-test.c++",
+    deps = [":ring-buffer"],
+)
+
+kj_test(
+    src = "small-weak-vector-test.c++",
+    deps = [
+        ":small-weak-vector",
+        ":util",
+    ],
+)
+
+wd_cc_library(
+    name = "state-machine",
+    hdrs = ["state-machine.h"],
+    visibility = ["//visibility:public"],
+    deps = ["@capnp-cpp//src/kj"],
+)
+
+kj_test(
+    src = "state-machine-test.c++",
+    deps = [":state-machine"],
+)

@@ -1,16 +1,22 @@
 # Copy to .dev.vars for local development. Never commit real values.
-DEVICE_AUTH_TOKEN="REPLACE_ME"
+# Per-device credentials are required by default. Keep these device IDs aligned
+# and replace every value before starting the Worker.
+DEVICE_TOKENS_JSON='{"voice-pe-REPLACE_ME":"REPLACE_ME"}'
+HERMES_SESSION_KEYS_JSON='{"voice-pe-REPLACE_ME":"agent:main:voice:device:voice-pe-REPLACE_ME"}'
 ELEVENLABS_API_KEY="REPLACE_ME"
 ELEVENLABS_VOICE_ID="REPLACE_ME"
 HERMES_BASE_URL="https://hermes.example.com"
 HERMES_API_KEY="REPLACE_ME"
 
-# Optional Worker-owned device → Hermes long-term-memory scope mapping.
-# Devices never supply this value. Omitted devices use voice:<device-id>.
-# HERMES_SESSION_KEYS_JSON='{"voice-pe-01":"agent:main:voice:room:kitchen"}'
+# Secure default is 15 minutes. Set a room-appropriate explicit boundary.
+CONVERSATION_IDLE_SECONDS="900"
+# Decoded realtime reply audio is hard-bounded to 1-30 seconds per turn.
+REALTIME_MAX_OUTPUT_SECONDS="30"
 
-# Optional hard conversation rotation after inactivity; disabled by default.
-# CONVERSATION_IDLE_SECONDS="1800"
+# Stable agent/profile fence. Increment the revision when SOUL, tools, sandbox,
+# memory policy, or another behavior-defining profile property changes.
+HERMES_PROFILE_ID="voice-safe"
+HERMES_BINDING_REVISION="v1"
 
 # Optional Cloudflare Access service token protecting HERMES_BASE_URL.
 # CF_ACCESS_CLIENT_ID="service-token-id.access"

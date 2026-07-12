@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+umask 077
+
+readonly RUNTIME_ROOT="/tmp/ha-voice-hermes"
+readonly STORAGE_ROOT="/data/workerd"
+readonly PREPARE="/usr/local/bin/prepare-runtime"
+readonly READY_URL="https://127.0.0.1:8443/healthz"
+readonly CERTIFICATE_DEGRADED_MARKER="$RUNTIME_ROOT/certificate-degraded"
+
+child_pid=""
+probe_directory=""
+active_fingerprint=""
+active_options_fingerprint=""
+active_certificate_not_after_epoch=""
+poll_seconds="30"
+pending_fingerprint=""
+certificate_failure_deadline_epoch=""
+
+log_info() {
+  printf '%s\n' "[gateway] $1"
+}
+
+log_error() {
+  printf '%s\n' "[gateway] $1" >&2
+}
+
+remove_generation() {
+  local directory="${1:-}"
+  if [[ -n "$directory" && "$directory" == "$RUNTIME_ROOT"/* && -d "$directory" && ! -L "$directory" ]]; then
+    rm -rf --one-file-system "$directory"
+  fi
+}
+
+stop_child() {
+  if [[ -z "$child_pid" ]]; then
+    return
+  fi
+  if kill -0 "$child_pid" 2>/dev/null; then
+    kill -TERM "$child_pid" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      if ! kill -0 "$child_pid" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+  fi
+  if kill -0 "$child_pid" 2>/dev/null; then
+    log_error "workerd did not stop in time; terminating it"
+    kill -KILL "$child_pid" 2>/dev/null || true
+  fi
+  wait "$child_pid" 2>/dev/null || true
+  child_pid=""
+}
+
+shutdown() {
+  trap - TERM INT EXIT
+  remove_generation "$probe_directory"
+  stop_child
+  exit 0
+}
+trap shutdown TERM INT
+trap 'remove_generation "$probe_directory"; stop_child' EXIT
+
+if [[ -L "$RUNTIME_ROOT" ]]; then
+  log_error "runtime root must not be a symbolic link"
+  exit 1
+fi
+# The unprivileged runtime group may traverse this root but cannot list or
+# mutate it; each randomized generation is owned by gateway and mode 0700.
+install -d -m 0710 -o root -g gateway "$RUNTIME_ROOT"
+find "$RUNTIME_ROOT" -mindepth 1 -maxdepth 1 -exec rm -rf --one-file-system -- {} +
+
+if [[ -e "$STORAGE_ROOT" ]]; then
+  if [[ ! -d "$STORAGE_ROOT" || -L "$STORAGE_ROOT" ]]; then
+    log_error "persistent workerd storage is not a safe directory"
+    exit 1
+  fi
+else
+  install -d -m 0700 -o gateway -g gateway "$STORAGE_ROOT"
+fi
+if [[ -n "$(find -P "$STORAGE_ROOT" -xdev -type l -print -quit)" ]]; then
+  log_error "persistent workerd storage contains a symbolic link"
+  exit 1
+fi
+if [[ -n "$(find -P "$STORAGE_ROOT" -xdev ! -type d ! -type f -print -quit)" ]]; then
+  log_error "persistent workerd storage contains an unsupported file type"
+  exit 1
+fi
+chown -R --no-dereference gateway:gateway "$STORAGE_ROOT"
+chmod 0700 "$STORAGE_ROOT"
+
+make_generation() {
+  local prefix="$1"
+  local directory
+  directory="$(mktemp -d -p "$RUNTIME_ROOT" "${prefix}.XXXXXXXX")"
+  chmod 0700 "$directory"
+  local status
+  if "$PREPARE" "$directory"; then
+    printf '%s' "$directory"
+    return 0
+  else
+    status="$?"
+    # A TLS-only validation failure deliberately preserves the protected
+    # probe long enough for the caller to compare its validated options hash.
+    # Every other failure is removed immediately.
+    if [[ "$status" -eq 21 ]]; then
+      printf '%s' "$directory"
+    else
+      remove_generation "$directory"
+    fi
+    return "$status"
+  fi
+}
+
+start_child() {
+  local generation="$1"
+
+  active_fingerprint="$(<"$generation/fingerprint")"
+  active_options_fingerprint="$(<"$generation/options-fingerprint")"
+  active_certificate_not_after_epoch="$(<"$generation/certificate-not-after")"
+  poll_seconds="$(<"$generation/poll-seconds")"
+  if [[ ! "$active_fingerprint" =~ ^[a-f0-9]{64}$ ||
+        ! "$active_options_fingerprint" =~ ^[a-f0-9]{64}$ ||
+        ! "$active_certificate_not_after_epoch" =~ ^[0-9]+$ ||
+        ! "$poll_seconds" =~ ^[0-9]+$ ]]; then
+    log_error "prepared runtime metadata is invalid"
+    return 1
+  fi
+
+  if [[ "$(stat -c '%u:%g:%a' "$generation")" != "0:0:700" ||
+        -n "$(find -P "$generation" -xdev -type l -print -quit)" ||
+        -n "$(find -P "$generation" -xdev ! -type d ! -type f -print -quit)" ]]; then
+    log_error "prepared runtime generation has unsafe ownership or file types"
+    return 1
+  fi
+  chown -R --no-dereference gateway:gateway "$generation"
+
+  /usr/bin/env -i \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+    HOME=/nonexistent \
+    TMPDIR=/tmp \
+    /usr/bin/s6-setuidgid gateway \
+    /usr/local/bin/workerd serve -I/ "$generation/config.capnp" &
+  child_pid="$!"
+
+  for _ in $(seq 1 60); do
+    if ! kill -0 "$child_pid" 2>/dev/null; then
+      wait "$child_pid" 2>/dev/null || true
+      child_pid=""
+      log_error "workerd exited before becoming ready"
+      return 1
+    fi
+    if curl --noproxy '*' --proto '=https' --insecure --fail --silent \
+        --show-error --max-time 2 "$READY_URL" >/dev/null 2>&1; then
+      # Cap'n Proto embeds are materialized during startup. At this point no
+      # option, key, certificate, or binding snapshot is needed on disk.
+      remove_generation "$generation"
+      log_info "TLS gateway is ready on port 8443"
+      return 0
+    fi
+    sleep 1
+  done
+
+  log_error "workerd did not become ready"
+  stop_child
+  return 1
+}
+
+initial_generation="$(make_generation generation)" || {
+  remove_generation "$initial_generation"
+  log_error "initial configuration is invalid; refusing to start"
+  exit 1
+}
+if ! start_child "$initial_generation"; then
+  remove_generation "$initial_generation"
+  exit 1
+fi
+
+while :; do
+  for _ in $(seq 1 "$poll_seconds"); do
+    now_epoch="$(date +%s)"
+    if (( now_epoch >= active_certificate_not_after_epoch )); then
+      log_error "the active TLS certificate has expired; stopping"
+      exit 1
+    fi
+    if [[ -n "$certificate_failure_deadline_epoch" ]] &&
+        (( now_epoch >= certificate_failure_deadline_epoch )); then
+      log_error "replacement certificate files remained invalid beyond the bounded grace period; stopping"
+      exit 1
+    fi
+    if ! kill -0 "$child_pid" 2>/dev/null; then
+      wait "$child_pid" 2>/dev/null || true
+      child_pid=""
+      log_error "workerd exited unexpectedly"
+      exit 1
+    fi
+    sleep 1
+  done
+
+  if probe_directory="$(make_generation probe)"; then
+    :
+  else
+    generation_status="$?"
+    pending_fingerprint=""
+    if [[ "$generation_status" -eq 21 ]]; then
+      candidate_options_fingerprint=""
+      if [[ -f "$probe_directory/options-fingerprint" &&
+            ! -L "$probe_directory/options-fingerprint" ]]; then
+        candidate_options_fingerprint="$(<"$probe_directory/options-fingerprint")"
+      fi
+      remove_generation "$probe_directory"
+      probe_directory=""
+      if [[ ! "$candidate_options_fingerprint" =~ ^[a-f0-9]{64}$ ||
+            "$candidate_options_fingerprint" != "$active_options_fingerprint" ]]; then
+        log_error "updated options accompany invalid certificate files; stopping so old credentials cannot remain active"
+        exit 1
+      fi
+      if [[ -z "$certificate_failure_deadline_epoch" ]]; then
+        certificate_grace_seconds=$((poll_seconds * 3))
+        if (( certificate_grace_seconds < 600 )); then
+          certificate_grace_seconds=600
+        fi
+        certificate_failure_deadline_epoch=$(($(date +%s) + certificate_grace_seconds))
+      fi
+      : >"$CERTIFICATE_DEGRADED_MARKER"
+      chmod 0600 "$CERTIFICATE_DEGRADED_MARKER"
+      log_error "updated certificate files are incomplete or invalid; retaining the active validated certificate temporarily and marking App health degraded"
+      continue
+    fi
+    remove_generation "$probe_directory"
+    probe_directory=""
+    log_error "updated options or runtime configuration are invalid; stopping so old credentials cannot remain active"
+    exit 1
+  fi
+  candidate_fingerprint="$(<"$probe_directory/fingerprint")"
+
+  if [[ "$candidate_fingerprint" == "$active_fingerprint" ]]; then
+    rm -f -- "$CERTIFICATE_DEGRADED_MARKER"
+    certificate_failure_deadline_epoch=""
+    pending_fingerprint=""
+    remove_generation "$probe_directory"
+    probe_directory=""
+    continue
+  fi
+
+  if [[ "$candidate_fingerprint" != "$pending_fingerprint" ]]; then
+    # Require the exact same complete, validated snapshot on two consecutive
+    # polls so sequential certificate renewal writes cannot cause a bad reload.
+    pending_fingerprint="$candidate_fingerprint"
+    remove_generation "$probe_directory"
+    probe_directory=""
+    log_info "validated a configuration change; waiting for one stable poll"
+    continue
+  fi
+
+  log_info "applying a stable options or certificate change"
+  pending_fingerprint=""
+  stop_child
+  if ! start_child "$probe_directory"; then
+    remove_generation "$probe_directory"
+    probe_directory=""
+    log_error "the new generation failed to start; failing closed"
+    exit 1
+  fi
+  rm -f -- "$CERTIFICATE_DEGRADED_MARKER"
+  certificate_failure_deadline_epoch=""
+  probe_directory=""
+done

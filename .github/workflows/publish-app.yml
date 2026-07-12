@@ -1,0 +1,1326 @@
+name: Publish Home Assistant App
+
+on:
+  push:
+    tags:
+      - "app-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-home-assistant-app
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare signed multi-architecture release
+    if: github.repository == 'troykelly/ha-voice-hermes'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      architectures: ${{ steps.metadata.outputs.architectures }}
+      image_name: ${{ steps.metadata.outputs.image_name }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      registry_prefix: ${{ steps.metadata.outputs.registry_prefix }}
+      staging_image_name: ${{ steps.metadata.outputs.staging_image_name }}
+      tag_ruleset_id: ${{ steps.tag_ruleset.outputs.id }}
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read and validate release metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          config=ha_voice_hermes_gateway/config.yaml
+          version="$(sed -n 's/^version: "\([^"]*\)"$/\1/p' "${config}")"
+          image="$(sed -n 's/^image: \(.*\)$/\1/p' "${config}")"
+          test -n "${version}"
+          test -n "${image}"
+          [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          test "${GITHUB_REF_NAME}" = "app-v${version}"
+          test "${GITHUB_SHA}" = "$(git rev-parse 'origin/main^{commit}')"
+          test "${image}" = "ghcr.io/troykelly/ha-voice-hermes-gateway"
+          staging_image_name="${image##*/}-staging-${GITHUB_RUN_ID}"
+          [[ "${staging_image_name}" =~ ^[a-z0-9][a-z0-9._-]+$ ]]
+          {
+            echo "version=${version}"
+            echo "image_name=${image##*/}"
+            echo "registry_prefix=${image%/*}"
+            echo "staging_image_name=${staging_image_name}"
+            echo 'architectures=["aarch64","amd64"]'
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Require a GitHub-verified signed annotated tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}")"
+          test "$(jq -r '.object.type' <<<"${ref_json}")" = tag
+          tag_sha="$(jq -r '.object.sha' <<<"${ref_json}")"
+          tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}")"
+          jq -e \
+            --arg commit "${GITHUB_SHA}" \
+            '.object.type == "commit" and
+             .object.sha == $commit and
+             .verification.verified == true' \
+            <<<"${tag_json}" >/dev/null
+
+      - name: Require an active immutable-tag ruleset
+        id: tag_ruleset
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${GH_TOKEN}"
+          summaries="$(mktemp)"
+          details="$(mktemp)"
+          gh api --paginate \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/rulesets?targets=tag&per_page=100" \
+            >"${summaries}"
+          while IFS= read -r ruleset_id; do
+            gh api \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" \
+              >>"${details}"
+          done < <(jq -s -r '.[][] | .id' "${summaries}")
+          ruleset_id="$(
+            jq -s -r '
+              [
+                .[] |
+                select(
+                  .target == "tag" and
+                  .enforcement == "active" and
+                  (.bypass_actors | type == "array" and length == 0) and
+                  (.conditions.ref_name.include == ["refs/tags/app-v*"]) and
+                  (.conditions.ref_name.exclude |
+                    type == "array" and length == 0) and
+                  ([.rules[]?.type] |
+                    index("update") != null and
+                    index("deletion") != null)
+                )
+              ] |
+              sort_by(.id) |
+              .[0].id // empty
+            ' "${details}"
+          )"
+          if [[ -z "${ruleset_id}" ]]; then
+            echo "An active no-bypass app-v* tag ruleset with update and deletion restrictions is required." >&2
+            exit 1
+          fi
+          echo "id=${ruleset_id}" >>"${GITHUB_OUTPUT}"
+
+      - name: Require native immutable GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${GH_TOKEN}"
+          state="$(
+            gh api \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/immutable-releases"
+          )"
+          jq -e '.enabled == true' <<<"${state}" >/dev/null || {
+            echo "GitHub native immutable Releases must be enabled before publishing." >&2
+            exit 1
+          }
+
+      - name: Refuse a fresh rebuild behind an existing Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          releases="$(mktemp)"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            >"${releases}"
+          matches="$(
+            jq -s \
+              --arg tag "${GITHUB_REF_NAME}" \
+              '[.[][] | select(.tag_name == $tag)]' \
+              "${releases}"
+          )"
+          test "$(jq 'length' <<<"${matches}")" -le 1
+          if [[ "$(jq 'length' <<<"${matches}")" -ne 0 ]]; then
+            echo "A Release already exists for ${GITHUB_REF_NAME}. Recover with Re-run failed jobs on its original workflow run, or publish a new version." >&2
+            exit 1
+          fi
+
+      - name: Require complete generated third-party notices
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.96.0 --profile minimal
+          rustup override set 1.96.0
+          rustc -vV | grep -Fqx 'release: 1.96.0'
+          rustc -vV | grep -Fqx 'commit-hash: ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96'
+          python3 scripts/generate-wasm-third-party-notices.py --check
+          python3 scripts/generate-workerd-rust-third-party-notices.py --release-check
+          python3 scripts/refresh-workerd-native-notices.py --check
+          python3 scripts/verify-workerd-native-notices.py
+          python3 scripts/verify-container-third-party-notices.py
+          test -s ha_voice_hermes_gateway/licenses/wasm/THIRD_PARTY_NOTICES.md
+          test -s ha_voice_hermes_gateway/licenses/container/COMPONENTS.json
+
+      - name: Refuse to overwrite an existing version image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_NAME: ${{ steps.metadata.outputs.image_name }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          versions="$(mktemp)"
+          errors="$(mktemp)"
+          trap 'rm -f "${versions}" "${errors}"' EXIT
+          endpoint="users/${GITHUB_REPOSITORY_OWNER}/packages/container/${IMAGE_NAME}/versions?per_page=100"
+          if gh api --paginate "${endpoint}" >"${versions}" 2>"${errors}"; then
+            if jq -s -e \
+                --arg version "${VERSION}" \
+                '[.[][] | .metadata.container.tags[]?] | index($version) != null' \
+                "${versions}" >/dev/null; then
+              echo "Refusing to rebuild existing App image version ${VERSION}. Recover with Re-run failed jobs on its original workflow run, or publish a new version." >&2
+              exit 1
+            fi
+          elif ! grep -Fq 'HTTP 404' "${errors}"; then
+            echo "Could not prove that the App image version is unused; failing closed." >&2
+            sed -n '1,20p' "${errors}" >&2
+            exit 1
+          fi
+
+      - name: Require private or absent run-specific staging packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGING_IMAGE_NAME: ${{ steps.metadata.outputs.staging_image_name }}
+        run: |
+          set -euo pipefail
+          for package in \
+            "${STAGING_IMAGE_NAME}" \
+            "amd64-${STAGING_IMAGE_NAME}" \
+            "aarch64-${STAGING_IMAGE_NAME}"; do
+            details="$(mktemp)"
+            errors="$(mktemp)"
+            endpoint="users/${GITHUB_REPOSITORY_OWNER}/packages/container/${package}"
+            if gh api "${endpoint}" >"${details}" 2>"${errors}"; then
+              jq -e '.package_type == "container" and .visibility == "private"' \
+                "${details}" >/dev/null || {
+                echo "Run-specific staging package ${package} is not private." >&2
+                exit 1
+              }
+            elif ! grep -Fq 'HTTP 404' "${errors}"; then
+              echo "Could not prove staging package ${package} is private or absent." >&2
+              sed -n '1,20p' "${errors}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Prepare native runner matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@4de35182ce1e329181bffcbcc84d33db5e2c7e10 # 2026.06.0
+        with:
+          architectures: ${{ steps.metadata.outputs.architectures }}
+          image-name: ${{ steps.metadata.outputs.staging_image_name }}
+          registry-prefix: ${{ steps.metadata.outputs.registry_prefix }}
+
+  build:
+    name: Build and sign ${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Build, publish, and keyless-sign architecture image
+        id: build
+        uses: home-assistant/builder/actions/build-image@4de35182ce1e329181bffcbcc84d33db5e2c7e10 # 2026.06.0
+        with:
+          arch: ${{ matrix.arch }}
+          build-args: |
+            BUILD_DESCRIPTION=Local realtime Voice Preview Edition gateway for Hermes Agent and ElevenLabs
+            BUILD_NAME=Home Assistant Voice Hermes Gateway
+            BUILD_REVISION=${{ github.sha }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          context: ./ha_voice_hermes_gateway
+          image: ${{ matrix.image }}
+          image-tags: |
+            sha-${{ github.sha }}
+          labels: |
+            io.hass.type=app
+            io.hass.name=Home Assistant Voice Hermes Gateway
+            io.hass.description=Local realtime Voice Preview Edition gateway for Hermes Agent and ElevenLabs
+            io.hass.url=https://github.com/troykelly/ha-voice-hermes
+            org.opencontainers.image.revision=${{ github.sha }}
+          push: true
+          version: ${{ needs.prepare.outputs.version }}
+
+      - name: Require the architecture staging package to remain private
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          package="${IMAGE##*/}"
+          details=
+          for _ in {1..15}; do
+            if details="$(
+              gh api \
+                "users/${GITHUB_REPOSITORY_OWNER}/packages/container/${package}" \
+                2>/dev/null
+            )"; then
+              break
+            fi
+            sleep 2
+          done
+          test -n "${details}"
+          jq -e '.package_type == "container" and .visibility == "private"' \
+            <<<"${details}" >/dev/null || {
+            echo "Architecture staging package ${package} became non-private." >&2
+            exit 1
+          }
+
+      - name: Verify the architecture image signature
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          test "${DIGEST#sha256:}" != "${DIGEST}"
+          test "${#DIGEST}" -eq 71
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-app.yml@refs/tags/${GITHUB_REF_NAME}"
+          cosign verify \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE}@${DIGEST}" >/dev/null
+
+      - name: Prepare immutable architecture evidence
+        run: mkdir -p release-evidence
+
+      - name: Generate exact architecture image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          artifact-name: >-
+            ha-voice-hermes-gateway-${{ needs.prepare.outputs.version }}-${{ matrix.arch }}.spdx.json
+          config: .syft.yaml
+          format: spdx-json
+          github-token: ""
+          image: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          output-file: >-
+            release-evidence/ha-voice-hermes-gateway-${{ needs.prepare.outputs.version }}-${{ matrix.arch }}.spdx.json
+          syft-version: v1.46.0
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest architecture build provenance
+        id: provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          push-to-registry: true
+          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-name: ${{ matrix.image }}
+
+      - name: Attest architecture SBOM
+        id: sbom-attestation
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          push-to-registry: true
+          sbom-path: >-
+            release-evidence/ha-voice-hermes-gateway-${{ needs.prepare.outputs.version }}-${{ matrix.arch }}.spdx.json
+          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-name: ${{ matrix.image }}
+          subject-version: ${{ needs.prepare.outputs.version }}
+
+      - name: Assemble architecture release evidence
+        env:
+          ARCH: ${{ matrix.arch }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ matrix.image }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          SBOM_BUNDLE: ${{ steps.sbom-attestation.outputs.bundle-path }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          base="ha-voice-hermes-gateway-${VERSION}-${ARCH}"
+          sbom="release-evidence/${base}.spdx.json"
+          test -s "${PROVENANCE_BUNDLE}"
+          test -s "${SBOM_BUNDLE}"
+          jq -e '
+            .spdxVersion == "SPDX-2.3" and
+            (.packages | type == "array" and length > 0)
+          ' "${sbom}" >/dev/null
+          install -m 0644 \
+            "${PROVENANCE_BUNDLE}" \
+            "release-evidence/${base}.provenance.intoto.jsonl"
+          install -m 0644 \
+            "${SBOM_BUNDLE}" \
+            "release-evidence/${base}.sbom-attestation.intoto.jsonl"
+          jq -n \
+            --arg architecture "${ARCH}" \
+            --arg digest "${DIGEST}" \
+            --arg image "${IMAGE}" \
+            --arg source_commit "${GITHUB_SHA}" \
+            --arg source_ref "refs/tags/${GITHUB_REF_NAME}" \
+            --arg version "${VERSION}" \
+            '{
+              schema_version: 1,
+              image: $image,
+              digest: $digest,
+              architecture: $architecture,
+              version: $version,
+              source_commit: $source_commit,
+              source_ref: $source_ref
+            }' >"release-evidence/${base}.image.json"
+          {
+            printf 'spdx_id\tname\tversion\tlicense_concluded\tlicense_declared\n'
+            jq -r '
+              def cell: (. // "") | tostring | gsub("[\\t\\r\\n]"; " ");
+              .packages[]? |
+              [.SPDXID, .name, .versionInfo, .licenseConcluded, .licenseDeclared] |
+              map(cell) | @tsv
+            ' "${sbom}" | LC_ALL=C sort
+          } >"release-evidence/${base}.license-inventory.tsv"
+          test "$(find release-evidence -maxdepth 1 -type f -name "${base}.*" | wc -l)" -eq 5
+
+      - name: Upload architecture release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: release-evidence-${{ matrix.arch }}
+          overwrite: true
+          path: release-evidence/
+          retention-days: 90
+
+  manifest:
+    name: Publish and sign staging multi-architecture manifest
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    outputs:
+      digest: ${{ steps.staging.outputs.digest }}
+    steps:
+      - name: Publish and keyless-sign manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@4de35182ce1e329181bffcbcc84d33db5e2c7e10 # 2026.06.0
+        with:
+          architectures: ${{ needs.prepare.outputs.architectures }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image-name: ${{ needs.prepare.outputs.staging_image_name }}
+          image-tags: |
+            sha-${{ github.sha }}
+          registry-prefix: ${{ needs.prepare.outputs.registry_prefix }}
+
+      - name: Resolve the exact staging digest
+        id: staging
+        env:
+          IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.staging_image_name }}
+        run: |
+          set -euo pipefail
+          staging="${IMAGE}:sha-${GITHUB_SHA}"
+          digest="$(
+            docker buildx imagetools inspect \
+              --format '{{json .Manifest}}' \
+              "${staging}" |
+              jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))'
+          )"
+          echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
+
+      - name: Verify the staging multi-architecture signature
+        env:
+          DIGEST: ${{ steps.staging.outputs.digest }}
+          IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.staging_image_name }}
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-app.yml@refs/tags/${GITHUB_REF_NAME}"
+          cosign verify \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE}@${DIGEST}" >/dev/null
+
+      - name: Attest multi-architecture provenance
+        id: provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          push-to-registry: true
+          subject-digest: ${{ steps.staging.outputs.digest }}
+          subject-name: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.staging_image_name }}
+
+      - name: Assemble multi-architecture release evidence
+        env:
+          DIGEST: ${{ steps.staging.outputs.digest }}
+          IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.staging_image_name }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-evidence
+          base="ha-voice-hermes-gateway-${VERSION}-multiarch"
+          test -s "${PROVENANCE_BUNDLE}"
+          install -m 0644 \
+            "${PROVENANCE_BUNDLE}" \
+            "release-evidence/${base}.provenance.intoto.jsonl"
+          docker buildx imagetools inspect --raw \
+            "${IMAGE}@${DIGEST}" >"release-evidence/${base}.oci-index.json"
+          test "sha256:$(sha256sum "release-evidence/${base}.oci-index.json" | cut -d' ' -f1)" = "${DIGEST}"
+          jq -e '
+            .schemaVersion == 2 and
+            ([.manifests[] |
+              select(.platform.os == "linux") |
+              .platform.architecture] | sort) == ["amd64", "arm64"]
+          ' "release-evidence/${base}.oci-index.json" >/dev/null
+
+      - name: Require every run-specific staging package to remain private
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGING_IMAGE_NAME: ${{ needs.prepare.outputs.staging_image_name }}
+        run: |
+          set -euo pipefail
+          for package in \
+            "${STAGING_IMAGE_NAME}" \
+            "amd64-${STAGING_IMAGE_NAME}" \
+            "aarch64-${STAGING_IMAGE_NAME}"; do
+            details=
+            for _ in {1..15}; do
+              if details="$(
+                gh api \
+                  "users/${GITHUB_REPOSITORY_OWNER}/packages/container/${package}" \
+                  2>/dev/null
+              )"; then
+                break
+              fi
+              sleep 2
+            done
+            test -n "${details}"
+            jq -e '.package_type == "container" and .visibility == "private"' \
+              <<<"${details}" >/dev/null || {
+              echo "Run-specific staging package ${package} became non-private." >&2
+              exit 1
+            }
+          done
+
+      - name: Upload multi-architecture release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: release-evidence-multiarch
+          overwrite: true
+          path: release-evidence/
+          retention-days: 90
+
+  evidence:
+    name: Assemble source-first immutable release evidence
+    needs: [prepare, build, manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      attestations: read
+      contents: read
+      id-token: write
+      packages: read
+    steps:
+      - name: Check out the validated tag without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download release evidence from this workflow run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          digest-mismatch: error
+          merge-multiple: true
+          path: release-assets
+          pattern: release-evidence-*
+
+      - name: Log in to GHCR for exact private staging evidence
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+
+      - name: Install pinned arm64 emulation
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          cache-image: false
+          image: >-
+            docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+
+      - name: Verify evidence and assemble immutable release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.staging_image_name }}
+          MANIFEST_DIGEST: ${{ needs.manifest.outputs.digest }}
+          STAGING_IMAGE_NAME: ${{ needs.prepare.outputs.staging_image_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-app.yml@refs/tags/${GITHUB_REF_NAME}"
+          if find release-assets -mindepth 1 -maxdepth 1 ! -type f -print -quit | grep -q .; then
+            echo "Downloaded release evidence contains a non-regular top-level entry" >&2
+            exit 1
+          fi
+
+          expected=()
+          for arch in amd64 aarch64; do
+            base="ha-voice-hermes-gateway-${VERSION}-${arch}"
+            descriptor="release-assets/${base}.image.json"
+            sbom="release-assets/${base}.spdx.json"
+            provenance="release-assets/${base}.provenance.intoto.jsonl"
+            sbom_attestation="release-assets/${base}.sbom-attestation.intoto.jsonl"
+            expected+=(
+              "${base}.image.json"
+              "${base}.license-inventory.tsv"
+              "${base}.provenance.intoto.jsonl"
+              "${base}.sbom-attestation.intoto.jsonl"
+              "${base}.spdx.json"
+            )
+            jq -e \
+              --arg arch "${arch}" \
+              --arg commit "${GITHUB_SHA}" \
+              --arg ref "refs/tags/${GITHUB_REF_NAME}" \
+              --arg staging_image_name "${STAGING_IMAGE_NAME}" \
+              --arg version "${VERSION}" '
+                .schema_version == 1 and
+                .architecture == $arch and
+                .source_commit == $commit and
+                .source_ref == $ref and
+                .version == $version and
+                .image == ("ghcr.io/troykelly/" + $arch + "-" + $staging_image_name) and
+                (.digest | test("^sha256:[a-f0-9]{64}$"))
+              ' "${descriptor}" >/dev/null
+            arch_image="$(jq -er '.image' "${descriptor}")"
+            arch_digest="$(jq -er '.digest' "${descriptor}")"
+            cosign verify \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "${arch_image}@${arch_digest}" >/dev/null
+            gh attestation verify "oci://${arch_image}@${arch_digest}" \
+              --bundle "${provenance}" \
+              --cert-identity "${identity}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --source-digest "${GITHUB_SHA}" \
+              --source-ref "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+            gh attestation verify "oci://${arch_image}@${arch_digest}" \
+              --bundle "${sbom_attestation}" \
+              --cert-identity "${identity}" \
+              --predicate-type https://spdx.dev/Document/v2.3 \
+              --repo "${GITHUB_REPOSITORY}" \
+              --source-digest "${GITHUB_SHA}" \
+              --source-ref "refs/tags/${GITHUB_REF_NAME}" \
+              --format json >"${RUNNER_TEMP}/${arch}-sbom-verification.json"
+            jq -e 'length == 1' "${RUNNER_TEMP}/${arch}-sbom-verification.json" >/dev/null
+            jq -S '.[0].verificationResult.statement.predicate' \
+              "${RUNNER_TEMP}/${arch}-sbom-verification.json" \
+              >"${RUNNER_TEMP}/${arch}-attested-sbom.json"
+            jq -S . "${sbom}" >"${RUNNER_TEMP}/${arch}-standalone-sbom.json"
+            cmp "${RUNNER_TEMP}/${arch}-attested-sbom.json" \
+              "${RUNNER_TEMP}/${arch}-standalone-sbom.json"
+          done
+
+          multiarch_base="ha-voice-hermes-gateway-${VERSION}-multiarch"
+          index="release-assets/${multiarch_base}.oci-index.json"
+          provenance="release-assets/${multiarch_base}.provenance.intoto.jsonl"
+          expected+=(
+            "${multiarch_base}.oci-index.json"
+            "${multiarch_base}.provenance.intoto.jsonl"
+          )
+          test "sha256:$(sha256sum "${index}" | cut -d' ' -f1)" = "${MANIFEST_DIGEST}"
+          cosign verify \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE}@${MANIFEST_DIGEST}" >/dev/null
+          gh attestation verify "oci://${IMAGE}@${MANIFEST_DIGEST}" \
+            --bundle "${provenance}" \
+            --cert-identity "${identity}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --source-digest "${GITHUB_SHA}" \
+            --source-ref "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+
+          printf '%s\n' "${expected[@]}" | LC_ALL=C sort >"${RUNNER_TEMP}/expected-evidence"
+          find release-assets -maxdepth 1 -type f -printf '%f\n' |
+            LC_ALL=C sort >"${RUNNER_TEMP}/actual-evidence"
+          cmp "${RUNNER_TEMP}/expected-evidence" "${RUNNER_TEMP}/actual-evidence"
+
+          python3 scripts/generate-wasm-third-party-notices.py --check
+          python3 scripts/generate-workerd-rust-third-party-notices.py --release-check
+          python3 scripts/refresh-workerd-native-notices.py --check
+          python3 scripts/verify-workerd-native-notices.py
+          python3 scripts/verify-container-third-party-notices.py
+          epoch="$(git show -s --format=%ct "${GITHUB_SHA}")"
+          source_image=
+          for arch in amd64 aarch64; do
+            base="ha-voice-hermes-gateway-${VERSION}-${arch}"
+            descriptor="release-assets/${base}.image.json"
+            arch_image="$(jq -er '.image' "${descriptor}")"
+            arch_digest="$(jq -er '.digest' "${descriptor}")"
+            platform="${arch}"
+            if [[ "${arch}" = aarch64 ]]; then
+              platform=arm64
+            fi
+            docker pull --platform "linux/${platform}" "${arch_image}@${arch_digest}"
+            python3 scripts/generate-debian-source-lock.py \
+              --image "${arch_image}@${arch_digest}" \
+              --check
+            if [[ -z "${source_image}" ]]; then
+              source_image="${arch_image}@${arch_digest}"
+            fi
+            container="$(docker create --platform "linux/${platform}" "${arch_image}@${arch_digest}")"
+            notice_root="$(mktemp -d)"
+            install -d -m 0755 "${notice_root}/usr/share/doc"
+            docker cp -L "${container}:/usr/share/doc/." "${notice_root}/usr/share/doc/"
+            docker rm "${container}" >/dev/null
+            find "${notice_root}/usr/share/doc" -type f ! -name copyright -delete
+            find "${notice_root}/usr/share/doc" -type l -delete
+            find "${notice_root}/usr/share/doc" -depth -type d -empty -delete
+            test "$(find "${notice_root}/usr/share/doc" -type f -name copyright | wc -l)" -gt 0
+            tar --sort=name \
+              --mtime="@${epoch}" \
+              --owner=0 \
+              --group=0 \
+              --numeric-owner \
+              -cf - \
+              -C "${notice_root}" usr |
+              gzip -n >"release-assets/${base}.debian-copyright.tar.gz"
+          done
+          test -n "${source_image}"
+          scripts/build-debian-corresponding-source.sh \
+            "${source_image}" \
+            "release-assets/ha-voice-hermes-gateway-${VERSION}-debian-corresponding-source.tar.gz"
+          tar --sort=name \
+            --mtime="@${epoch}" \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -cf - \
+            -C ha_voice_hermes_gateway licenses |
+            gzip -n >"release-assets/ha-voice-hermes-gateway-${VERSION}-licenses.tar.gz"
+
+          (
+            cd release-assets
+            find . -maxdepth 1 -type f -printf '%f\n' |
+              LC_ALL=C sort |
+              while IFS= read -r asset; do
+                sha256sum "${asset}"
+              done >SHA256SUMS
+          )
+          cosign sign-blob --yes \
+            --bundle release-assets/SHA256SUMS.sigstore.json \
+            release-assets/SHA256SUMS
+          cosign verify-blob \
+            --bundle release-assets/SHA256SUMS.sigstore.json \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            release-assets/SHA256SUMS
+          test "$(wc -l <release-assets/SHA256SUMS)" -eq 16
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 18
+
+      - name: Upload final immutable release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: release-assets-final
+          overwrite: true
+          path: release-assets/
+          retention-days: 90
+
+  promotion:
+    name: Promote, sign, and attest the released digest
+    needs: [prepare, manifest, evidence, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    outputs:
+      digest: ${{ steps.promote.outputs.digest }}
+    steps:
+      - name: Recheck read-only repository release policy
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
+          TAG_RULESET_ID: ${{ needs.prepare.outputs.tag_ruleset_id }}
+        run: |
+          set -euo pipefail
+          test -n "${GH_TOKEN}"
+          state="$(
+            gh api \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/immutable-releases"
+          )"
+          jq -e '.enabled == true' <<<"${state}" >/dev/null
+          ruleset="$(
+            gh api \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/rulesets/${TAG_RULESET_ID}"
+          )"
+          jq -e \
+            --argjson id "${TAG_RULESET_ID}" '
+              .id == $id and
+              .target == "tag" and
+              .enforcement == "active" and
+              (.bypass_actors | type == "array" and length == 0) and
+              (.conditions.ref_name.include == ["refs/tags/app-v*"]) and
+              (.conditions.ref_name.exclude |
+                type == "array" and length == 0) and
+              ([.rules[]?.type] |
+                index("update") != null and
+                index("deletion") != null)
+            ' <<<"${ruleset}" >/dev/null
+
+      - name: Log in to GHCR for final tag promotion
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+
+      - name: Refuse to roll latest back from a newer App Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pages="$(mktemp)"
+          gh api --paginate \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            >"${pages}"
+          app_releases="$(
+            jq -s '
+              [
+                .[][] |
+                select(
+                  .draft == false and
+                  (.tag_name | type == "string") and
+                  (.tag_name | startswith("app-v"))
+                )
+              ]
+            ' "${pages}"
+          )"
+          jq -e \
+            --arg tag "${GITHUB_REF_NAME}" '
+              length > 0 and
+              all(.[];
+                (.id | type) == "number" and
+                (.published_at | type) == "string"
+              ) and
+              ([.[] | select(.tag_name == $tag)] | length) == 1 and
+              ([.[] | select(.tag_name == $tag)][0].immutable == true) and
+              ((sort_by(.published_at, .id) | last).tag_name == $tag)
+            ' <<<"${app_releases}" >/dev/null || {
+            echo "Refusing to move latest: ${GITHUB_REF_NAME} is not the newest immutable published app-v* Release." >&2
+            exit 1
+          }
+
+      - name: Apply and verify the version and latest tags
+        id: promote
+        env:
+          EXPECTED_DIGEST: ${{ needs.manifest.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.image_name }}
+          IMAGE_NAME: ${{ needs.prepare.outputs.image_name }}
+          STAGING_IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.staging_image_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          staging="${STAGING_IMAGE}:sha-${GITHUB_SHA}"
+          digest="$(
+            docker buildx imagetools inspect \
+              --format '{{json .Manifest}}' \
+              "${staging}" |
+              jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))'
+          )"
+          test "${digest}" = "${EXPECTED_DIGEST}"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-app.yml@refs/tags/${GITHUB_REF_NAME}"
+          cosign verify \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${STAGING_IMAGE}@${digest}" >/dev/null
+
+          versions="$(mktemp)"
+          errors="$(mktemp)"
+          endpoint="users/${GITHUB_REPOSITORY_OWNER}/packages/container/${IMAGE_NAME}/versions?per_page=100"
+          if ! gh api --paginate "${endpoint}" >"${versions}" 2>"${errors}"; then
+            if grep -Fq 'HTTP 404' "${errors}"; then
+              printf '[]\n' >"${versions}"
+            else
+              echo "Could not prove the public version tag is unused or identical." >&2
+              sed -n '1,20p' "${errors}" >&2
+              exit 1
+            fi
+          fi
+          matches="$(
+            jq -s \
+              --arg version "${VERSION}" \
+              '[.[][] | select(.metadata.container.tags | index($version) != null)]' \
+              "${versions}"
+          )"
+          test "$(jq 'length' <<<"${matches}")" -le 1
+          if [[ "$(jq 'length' <<<"${matches}")" -eq 1 ]]; then
+            test "$(jq -er '.[0].name' <<<"${matches}")" = "${digest}"
+            existing="$(
+              docker buildx imagetools inspect \
+                --format '{{json .Manifest}}' \
+                "${IMAGE}:${VERSION}" |
+                jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))'
+            )"
+            test "${existing}" = "${digest}"
+          elif existing_json="$(
+            docker buildx imagetools inspect \
+              --format '{{json .Manifest}}' \
+              "${IMAGE}:${VERSION}" 2>/dev/null
+          )"; then
+            existing="$(
+              jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))' \
+                <<<"${existing_json}"
+            )"
+            test "${existing}" = "${digest}"
+          fi
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION}" \
+            --tag "${IMAGE}:latest" \
+            "${STAGING_IMAGE}@${digest}"
+          for tag in "${VERSION}" latest; do
+            promoted="$(
+              docker buildx imagetools inspect \
+                --format '{{json .Manifest}}' \
+                "${IMAGE}:${tag}" |
+                jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))'
+            )"
+            test "${promoted}" = "${digest}"
+          done
+          cosign sign --yes "${IMAGE}@${digest}"
+          echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
+
+      - name: Attest public-image promotion provenance
+        id: public_provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          push-to-registry: true
+          subject-digest: ${{ steps.promote.outputs.digest }}
+          subject-name: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.image_name }}
+
+      - name: Verify and preserve public-image promotion evidence
+        env:
+          DIGEST: ${{ steps.promote.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.image_name }}
+          PROVENANCE_BUNDLE: ${{ steps.public_provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          test -s "${PROVENANCE_BUNDLE}"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-app.yml@refs/tags/${GITHUB_REF_NAME}"
+          cosign verify \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE}@${DIGEST}" >/dev/null
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --bundle "${PROVENANCE_BUNDLE}" \
+            --cert-identity "${identity}" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --repo "${GITHUB_REPOSITORY}" \
+            --source-digest "${GITHUB_SHA}" \
+            --source-ref "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          mkdir -p public-promotion-evidence
+          install -m 0644 \
+            "${PROVENANCE_BUNDLE}" \
+            public-promotion-evidence/ha-voice-hermes-gateway-public-promotion.provenance.intoto.jsonl
+
+      - name: Upload exact public-promotion evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: public-promotion-evidence
+          overwrite: true
+          path: public-promotion-evidence/
+          retention-days: 90
+
+  release:
+    name: Publish source-first immutable GitHub Release
+    needs: [prepare, evidence, manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      attestations: read
+      contents: write
+      packages: read
+    steps:
+      - name: Download the verified immutable release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          digest-mismatch: error
+          name: release-assets-final
+          path: release-assets
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+
+      - name: Verify downloaded checksums and signature
+        run: |
+          set -euo pipefail
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 18
+          (
+            cd release-assets
+            sha256sum --check SHA256SUMS
+          )
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-app.yml@refs/tags/${GITHUB_REF_NAME}"
+          cosign verify-blob \
+            --bundle release-assets/SHA256SUMS.sigstore.json \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            release-assets/SHA256SUMS
+
+      - name: Create or verify the final GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.image_name }}
+          MANIFEST_DIGEST: ${{ needs.manifest.outputs.digest }}
+          POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
+          STAGING_IMAGE_NAME: ${{ needs.prepare.outputs.staging_image_name }}
+          TAG_RULESET_ID: ${{ needs.prepare.outputs.tag_ruleset_id }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          github_api() {
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' "$@"
+          }
+          policy_api() {
+            GH_TOKEN="${POLICY_TOKEN}" \
+              gh api -H 'X-GitHub-Api-Version: 2026-03-10' "$@"
+          }
+          test -n "${POLICY_TOKEN}"
+          require_immutable_releases() {
+            local immutable_state
+            immutable_state="$(policy_api "repos/${GITHUB_REPOSITORY}/immutable-releases")"
+            jq -e '.enabled == true' <<<"${immutable_state}" >/dev/null || {
+              echo "GitHub native immutable Releases must remain enabled." >&2
+              return 1
+            }
+          }
+          require_immutable_releases
+          for package in \
+            "${STAGING_IMAGE_NAME}" \
+            "amd64-${STAGING_IMAGE_NAME}" \
+            "aarch64-${STAGING_IMAGE_NAME}"; do
+            details="$(
+              github_api \
+                "users/${GITHUB_REPOSITORY_OWNER}/packages/container/${package}"
+            )"
+            jq -e '.package_type == "container" and .visibility == "private"' \
+              <<<"${details}" >/dev/null || {
+              echo "Run-specific staging package ${package} is no longer private." >&2
+              exit 1
+            }
+          done
+          ref_json="$(github_api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}")"
+          test "$(jq -r '.object.type' <<<"${ref_json}")" = tag
+          tag_json="$(github_api "repos/${GITHUB_REPOSITORY}/git/tags/$(jq -r '.object.sha' <<<"${ref_json}")")"
+          jq -e \
+            --arg commit "${GITHUB_SHA}" '
+              .object.type == "commit" and
+              .object.sha == $commit and
+              .verification.verified == true
+            ' <<<"${tag_json}" >/dev/null
+          ruleset="$(
+            policy_api \
+              "repos/${GITHUB_REPOSITORY}/rulesets/${TAG_RULESET_ID}"
+          )"
+          jq -e \
+            --argjson id "${TAG_RULESET_ID}" '
+              .id == $id and
+              .target == "tag" and
+              .enforcement == "active" and
+              (.bypass_actors | type == "array" and length == 0) and
+              (.conditions.ref_name.include == ["refs/tags/app-v*"]) and
+              (.conditions.ref_name.exclude |
+                type == "array" and length == 0) and
+              ([.rules[]?.type] |
+                index("update") != null and
+                index("deletion") != null)
+            ' <<<"${ruleset}" >/dev/null
+          release_name="Home Assistant Voice Hermes Gateway ${VERSION}"
+          body_file="${RUNNER_TEMP}/release-body.md"
+          cat >"${body_file}" <<EOF
+          Experimental Home Assistant App release from signed source tag \`${GITHUB_REF_NAME}\`
+          at commit \`${GITHUB_SHA}\`.
+
+          Target multi-architecture image digest:
+
+          \`${IMAGE}@${MANIFEST_DIGEST}\`
+
+          The attached SPDX SBOMs, build/SBOM attestation bundles, OCI index,
+          dependency-license inventories, embedded license bundle, Debian
+          copyright archives, and signed \`SHA256SUMS\` describe that exact
+          image. The Debian corresponding-source archive covers the exact
+          binary package closure in both architectures. Verify the image and
+          assets before installation.
+
+          This immutable source/evidence Release is intentionally published
+          before that exact private-staging digest is copied to the public image
+          tags. The workflow signs and attests the public digest and anonymously
+          pulls both architectures after promotion. Until those later jobs pass,
+          this Release is a source offer and not an installation-success claim.
+
+          Factory/WebSerial firmware is intentionally not attached to this App
+          release. Firmware remains gated by its separately signed source tag
+          and physical adoption/recovery release record.
+          EOF
+
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          test "${#assets[@]}" -gt 0
+          assets_json="$(printf '%s\n' "${assets[@]}" | jq -Rsc 'split("\n")[:-1]')"
+
+          releases="$(mktemp)"
+          github_api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" >"${releases}"
+          matches="$(jq -s --arg tag "${GITHUB_REF_NAME}" '[.[][] | select(.tag_name == $tag)]' "${releases}")"
+          test "$(jq 'length' <<<"${matches}")" -le 1
+          release="$(jq -c '.[0] // empty' <<<"${matches}")"
+          created=false
+          if [[ -z "${release}" ]]; then
+            require_immutable_releases
+            request="$(mktemp)"
+            jq -n \
+              --arg body "$(<"${body_file}")" \
+              --arg name "${release_name}" \
+              --arg tag "${GITHUB_REF_NAME}" \
+              --arg target "${GITHUB_SHA}" \
+              '{
+                tag_name: $tag,
+                target_commitish: $target,
+                name: $name,
+                body: $body,
+                draft: true,
+                prerelease: false,
+                generate_release_notes: false
+              }' >"${request}"
+            release="$(github_api --method POST "repos/${GITHUB_REPOSITORY}/releases" --input "${request}")"
+            created=true
+          fi
+
+          release_id="$(jq -er '.id' <<<"${release}")"
+          draft="$(jq -er '.draft' <<<"${release}")"
+          prerelease="$(jq -er '.prerelease' <<<"${release}")"
+          test "$(jq -r '.tag_name' <<<"${release}")" = "${GITHUB_REF_NAME}"
+          test "$(jq -r '.name' <<<"${release}")" = "${release_name}"
+          test "$(jq -r '.body' <<<"${release}")" = "$(<"${body_file}")"
+          test "${prerelease}" = false
+
+          remote_assets="$(github_api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" | jq -s 'add')"
+          test "$(jq '[group_by(.name)[] | select(length > 1)] | length' <<<"${remote_assets}")" -eq 0
+          while IFS= read -r remote_name; do
+            jq -e --arg name "${remote_name}" 'index($name) != null' <<<"${assets_json}" >/dev/null
+          done < <(jq -r '.[].name' <<<"${remote_assets}")
+
+          verify_asset() {
+            local name="$1"
+            local file="release-assets/${name}"
+            local record expected_digest remote_digest remote_size
+            record="$(jq -c --arg name "${name}" '.[] | select(.name == $name)' <<<"${remote_assets}")"
+            if [[ -z "${record}" ]]; then
+              test "${draft}" = true
+              gh release upload \
+                "${GITHUB_REF_NAME}" \
+                "${file}" \
+                --repo "${GITHUB_REPOSITORY}" >/dev/null
+              remote_assets="$(github_api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" | jq -s 'add')"
+              record="$(jq -c --arg name "${name}" '.[] | select(.name == $name)' <<<"${remote_assets}")"
+            fi
+            test -n "${record}"
+            expected_digest="sha256:$(sha256sum "${file}" | cut -d' ' -f1)"
+            remote_digest="$(jq -r '.digest // empty' <<<"${record}")"
+            remote_size="$(jq -er '.size' <<<"${record}")"
+            test "${remote_size}" -eq "$(stat -c %s "${file}")"
+            if [[ -n "${remote_digest}" ]]; then
+              test "${remote_digest}" = "${expected_digest}"
+            else
+              downloaded="$(mktemp)"
+              github_api \
+                -H 'Accept: application/octet-stream' \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/$(jq -er '.id' <<<"${record}")" \
+                >"${downloaded}"
+              cmp "${file}" "${downloaded}"
+            fi
+          }
+
+          for asset in "${assets[@]}"; do
+            verify_asset "${asset}"
+          done
+          remote_assets="$(github_api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" | jq -s 'add')"
+          test "$(jq 'length' <<<"${remote_assets}")" -eq "${#assets[@]}"
+
+          if [[ "${draft}" = true ]]; then
+            require_immutable_releases
+            publish_request="$(mktemp)"
+            jq -n \
+              --arg body "$(<"${body_file}")" \
+              --arg name "${release_name}" \
+              '{
+                name: $name,
+                body: $body,
+                draft: false,
+                prerelease: false,
+                make_latest: "false"
+              }' >"${publish_request}"
+            release="$(github_api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --input "${publish_request}")"
+          elif [[ "${created}" = true ]]; then
+            echo "A newly created release unexpectedly ceased to be a draft" >&2
+            exit 1
+          fi
+          immutable=false
+          for _ in {1..30}; do
+            release="$(github_api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
+            if [[ "$(jq -r '.immutable // false' <<<"${release}")" = true ]]; then
+              immutable=true
+              break
+            fi
+            sleep 2
+          done
+          test "$(jq -r '.draft' <<<"${release}")" = false
+          test "$(jq -r '.prerelease' <<<"${release}")" = false
+          test "${immutable}" = true
+          test "$(jq -r '.tag_name' <<<"${release}")" = "${GITHUB_REF_NAME}"
+          test "$(jq -r '.name' <<<"${release}")" = "${release_name}"
+          test "$(jq -r '.body' <<<"${release}")" = "$(<"${body_file}")"
+          draft=false
+          remote_assets="$(github_api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" | jq -s 'add')"
+          test "$(jq '[group_by(.name)[] | select(length > 1)] | length' <<<"${remote_assets}")" -eq 0
+          test "$(jq 'length' <<<"${remote_assets}")" -eq "${#assets[@]}"
+          for asset in "${assets[@]}"; do
+            verify_asset "${asset}"
+          done
+          attestation_verified=false
+          for _ in {1..60}; do
+            if gh release verify "${GITHUB_REF_NAME}" \
+                --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              attestation_verified=true
+              break
+            fi
+            sleep 5
+          done
+          if [[ "${attestation_verified}" != true ]]; then
+            echo "GitHub did not provide a valid native release attestation." >&2
+            exit 1
+          fi
+          for asset in "${assets[@]}"; do
+            gh release verify-asset \
+              "${GITHUB_REF_NAME}" \
+              "release-assets/${asset}" \
+              --repo "${GITHUB_REPOSITORY}" >/dev/null
+          done
+
+  verify-public:
+    name: Verify anonymous public installability
+    needs: [prepare, promotion]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      attestations: read
+      contents: read
+    steps:
+      - name: Download exact public-promotion provenance
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          digest-mismatch: error
+          name: public-promotion-evidence
+          path: public-promotion-evidence
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+
+      - name: Pull and verify both architectures without registry credentials
+        env:
+          DIGEST: ${{ needs.promotion.outputs.digest }}
+          IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.image_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          for tag in "${VERSION}" latest; do
+            public_digest="$(
+              docker buildx imagetools inspect \
+                --format '{{json .Manifest}}' \
+                "${IMAGE}:${tag}" |
+                jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))'
+            )" || {
+              echo "The source/evidence Release is public, but the App package is not anonymously readable. A first GHCR promotion may create a private package; make it public in package settings, then rerun this failed job." >&2
+              exit 1
+            }
+            test "${public_digest}" = "${DIGEST}"
+          done
+          docker pull --platform linux/amd64 "${IMAGE}:${VERSION}"
+          docker pull --platform linux/arm64 "${IMAGE}:${VERSION}"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-app.yml@refs/tags/${GITHUB_REF_NAME}"
+          cosign verify \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE}@${DIGEST}" >/dev/null
+
+      - name: Verify public promotion provenance through GitHub
+        env:
+          DIGEST: ${{ needs.promotion.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: >-
+            ${{ needs.prepare.outputs.registry_prefix }}/${{ needs.prepare.outputs.image_name }}
+          PROVENANCE_BUNDLE: public-promotion-evidence/ha-voice-hermes-gateway-public-promotion.provenance.intoto.jsonl
+        run: |
+          set -euo pipefail
+          test -s "${PROVENANCE_BUNDLE}"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-app.yml@refs/tags/${GITHUB_REF_NAME}"
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --bundle "${PROVENANCE_BUNDLE}" \
+            --cert-identity "${identity}" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --repo "${GITHUB_REPOSITORY}" \
+            --source-digest "${GITHUB_SHA}" \
+            --source-ref "refs/tags/${GITHUB_REF_NAME}" >/dev/null

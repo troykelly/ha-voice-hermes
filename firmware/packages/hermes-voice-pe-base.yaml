@@ -14,6 +14,11 @@ substitutions:
   ota_password: ""
   # Release builds must override this with their public, immutable tag.
   dashboard_import_url: github://troykelly/ha-voice-hermes/firmware/hermes-voice-pe.yaml@v0.3.0
+  # Public installs fetch the exact vendored manifests and TFLites from the
+  # immutable release. Factory/local wrappers override these with local paths
+  # so pre-release CI verifies the identical bytes without a circular tag.
+  wake_word_model_manifest: https://raw.githubusercontent.com/troykelly/ha-voice-hermes/v0.3.0/firmware/models/okay_nabu.json
+  vad_model_manifest: https://raw.githubusercontent.com/troykelly/ha-voice-hermes/v0.3.0/firmware/models/vad.json
 
 esphome:
   name: ${name}
@@ -64,10 +69,11 @@ external_components:
       ref: 0579e7b9d8504264719c593474c85447253c9dc1
       path: esphome/components
     components: [voice_kit]
-    refresh: 0s
 
 logger:
-  level: DEBUG
+  # Release default: retain lifecycle/errors without streaming internals or
+  # provider-adjacent diagnostics. Clone-local development may override this.
+  level: INFO
   logs:
     sensor: WARN
 
@@ -85,33 +91,45 @@ wifi:
     - micro_wake_word.stop:
         id: mww
     - lambda: id(hermes).suspend_transport();
-    - ble.enable:
+    - wait_until:
+        condition:
+          lambda: return id(hermes).is_transport_suspended();
+        timeout: 3s
+    - if:
+        condition:
+          lambda: return id(hermes).is_transport_suspended();
+        then:
+          - ble.enable:
+        else:
+          # A wedged ESP-IDF WebSocket stop must not overlap BLE/Improv or
+          # block the ESPHome loop. Reboot into the default BLE-enabled state.
+          - logger.log:
+              level: ERROR
+              format: "Realtime transport did not quiesce; rebooting for safe provisioning"
+          - lambda: App.safe_reboot();
     - script.execute: control_leds
 
 improv_serial:
 
 esp32_ble:
-  name: hermes-vpe
+  # With no override ESPHome advertises the effective app name: MAC-suffixed
+  # in the factory image and the adopter's chosen unique name afterwards.
 
 esp32_improv:
   authorizer: center_button
   on_start:
-    - lambda: id(improv_ble_in_progress) = true;
     - light.turn_on:
         id: voice_leds
         brightness: 55%
         effect: Provisioning
   on_provisioning:
-    - lambda: id(improv_ble_in_progress) = true;
     - light.turn_on:
         id: voice_leds
         brightness: 55%
         effect: Provisioning
   on_provisioned:
-    - lambda: id(improv_ble_in_progress) = false;
     - script.execute: control_leds
   on_stop:
-    - lambda: id(improv_ble_in_progress) = false;
     - script.execute: control_leds
 
 ota:
@@ -120,6 +138,13 @@ ota:
     password: ${ota_password}
 
 safe_mode:
+
+# mbedTLS certificate notBefore/notAfter validation is enabled by the custom
+# component. WSS remains paused until this clock has synchronized.
+time:
+  - platform: sntp
+    id: tls_time
+    timezone: UTC0
 
 # Home Assistant is an optional media/control plane. Disabling the default API
 # reboot watchdog keeps Hermes voice operational even when HA is unavailable.
@@ -271,9 +296,10 @@ micro_wake_word:
     gain_factor: 4
   stop_after_detection: true
   models:
-    - model: https://github.com/kahrendt/microWakeWord/releases/download/okay_nabu_20241226.3/okay_nabu.json
+    - model: "${wake_word_model_manifest}"
       id: okay_nabu
   vad:
+    model: "${vad_model_manifest}"
   on_wake_word_detected:
     - if:
         condition:
@@ -298,6 +324,7 @@ hermes_voice:
     channels: 0
     gain_factor: 1
   speaker: hermes_response_speaker
+  time_id: tls_time
   micro_wake_word: mww
   silence_threshold: 250
   # Audio is already in flight while speaking; this is only the local commit
@@ -339,10 +366,6 @@ globals:
     type: uint8_t
     restore_value: false
     initial_value: "0"
-  - id: improv_ble_in_progress
-    type: bool
-    restore_value: false
-    initial_value: "false"
 
 switch:
   - platform: gpio
@@ -536,9 +559,21 @@ script:
                 condition:
                   not:
                     ble.enabled:
-            - lambda: id(hermes).resume_transport();
-            - script.execute: restart_wake_word
-            - script.execute: control_leds
+                timeout: 10s
+            - if:
+                condition:
+                  and:
+                    - wifi.connected:
+                    - not:
+                        ble.enabled:
+                then:
+                  - lambda: id(hermes).resume_transport();
+                  - script.execute: restart_wake_word
+                  - script.execute: control_leds
+                else:
+                  - logger.log:
+                      level: ERROR
+                      format: "BLE did not stop; realtime transport remains suspended"
 
   # Hermes owns conversational priority. HA audio is attenuated throughout a
   # turn, then restored without accidentally unducking music beneath an active
@@ -589,6 +624,7 @@ script:
             not:
               micro_wake_word.is_running:
                 id: mww
+          timeout: 5s
       - if:
           condition:
             and:

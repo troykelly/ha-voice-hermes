@@ -2,6 +2,10 @@
 # Universal factory image: no Wi-Fi, API, OTA, gateway, Hermes, ElevenLabs or
 # other provider credentials are embedded. Provision with authorized Improv
 # BLE or Improv Serial, then adopt in ESPHome.
+substitutions:
+  wake_word_model_manifest: models/okay_nabu.json
+  vad_model_manifest: models/vad.json
+
 packages:
   hermes_voice_pe_base: !include packages/hermes-voice-pe-base.yaml
 

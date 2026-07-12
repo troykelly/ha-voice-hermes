@@ -120,6 +120,15 @@ pub fn prepare_for_tts(markdown: &str) -> String {
     cap_tts_chars(&clean_for_tts(markdown), MAX_TTS_CHARS)
 }
 
+/// Prepare a response without changing its meaning through truncation.
+/// Production call sites use this strict variant so an over-limit response is
+/// reported as an error instead of being presented as a successful partial
+/// answer.
+pub fn prepare_for_tts_strict(markdown: &str) -> Option<String> {
+    let cleaned = clean_for_tts(markdown);
+    (!cleaned.is_empty() && cleaned.chars().count() <= MAX_TTS_CHARS).then_some(cleaned)
+}
+
 fn cap_tts_chars(text: &str, max_chars: usize) -> String {
     if max_chars == 0 {
         return String::new();
@@ -344,6 +353,16 @@ println!("do not speak this block");
         let prepared = prepare_for_tts(&oversized);
         assert!(prepared.chars().count() <= MAX_TTS_CHARS);
         assert!(prepared.ends_with('…'));
+    }
+
+    #[test]
+    fn strict_tts_preparation_rejects_instead_of_truncating() {
+        assert_eq!(
+            prepare_for_tts_strict("**Short answer.**"),
+            Some("Short answer.".into())
+        );
+        assert_eq!(prepare_for_tts_strict("```rust\nhidden\n```"), None);
+        assert_eq!(prepare_for_tts_strict(&"x".repeat(MAX_TTS_CHARS + 1)), None);
     }
 
     #[test]

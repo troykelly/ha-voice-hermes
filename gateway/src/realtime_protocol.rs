@@ -5,9 +5,14 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 pub const PROTOCOL_VERSION: u8 = 2;
 pub const AUDIO_HEADER_LEN: usize = 20;
-pub const MAX_AUDIO_PAYLOAD_BYTES: usize = 8 * 1024;
+pub const MAX_AUDIO_PAYLOAD_BYTES: usize = 2_048;
 pub const MAX_CONTROL_MESSAGE_BYTES: usize = 8 * 1024;
-pub const MAX_TRANSCRIPT_CHARS: usize = 16_000;
+// Keep transcript controls safely below the 8 KiB control envelope even when
+// every byte needs JSON escaping. The realtime gateway does not currently
+// send transcripts to the headless Voice PE, but the protocol remains safe
+// for future display clients.
+pub const MAX_TRANSCRIPT_CHARS: usize = 3 * 1024;
+pub const MAX_TRANSCRIPT_BYTES: usize = 3 * 1024;
 pub const AUDIO_FORMAT: &str = "pcm_s16le_16000_mono";
 pub const AUDIO_SAMPLE_RATE: u32 = 16_000;
 
@@ -16,6 +21,7 @@ pub struct TurnId(u64);
 
 impl TurnId {
     pub const fn new(value: u64) -> Self {
+        assert!(value != 0, "turn identifiers must be non-zero");
         Self(value)
     }
 
@@ -41,9 +47,11 @@ impl FromStr for TurnId {
         {
             return Err(ProtocolError::InvalidTurnId);
         }
-        u64::from_str_radix(value, 16)
-            .map(Self)
-            .map_err(|_| ProtocolError::InvalidTurnId)
+        let parsed = u64::from_str_radix(value, 16).map_err(|_| ProtocolError::InvalidTurnId)?;
+        if parsed == 0 {
+            return Err(ProtocolError::InvalidTurnId);
+        }
+        Ok(Self(parsed))
     }
 }
 
@@ -148,14 +156,19 @@ impl AudioHeader {
             return Err(ProtocolError::InvalidAudioHeaderLength);
         }
 
+        let turn_id = u64::from_be_bytes(
+            encoded[4..12]
+                .try_into()
+                .expect("fixed-width turn identifier"),
+        );
+        if turn_id == 0 {
+            return Err(ProtocolError::InvalidTurnId);
+        }
+
         Ok(Self {
             kind: encoded[1].try_into()?,
             flags: AudioFlags::new(encoded[2])?,
-            turn_id: TurnId::new(u64::from_be_bytes(
-                encoded[4..12]
-                    .try_into()
-                    .expect("fixed-width turn identifier"),
-            )),
+            turn_id: TurnId::new(turn_id),
             sequence: u32::from_be_bytes(
                 encoded[12..16]
                     .try_into()
@@ -388,6 +401,9 @@ impl ControlMessage {
         if self.version() != PROTOCOL_VERSION {
             return Err(ProtocolError::UnsupportedVersion);
         }
+        if self.turn_id().is_some_and(|turn_id| turn_id.get() == 0) {
+            return Err(ProtocolError::InvalidTurnId);
+        }
 
         match self {
             Self::Hello {
@@ -445,6 +461,9 @@ impl ControlMessage {
             Self::TurnCancel { reason, .. } => validate_label(reason, 64, "cancel reason")?,
             Self::TranscriptPartial { text, .. } | Self::TranscriptFinal { text, .. } => {
                 validate_text(text, 1, MAX_TRANSCRIPT_CHARS, "transcript")?;
+                if text.len() > MAX_TRANSCRIPT_BYTES {
+                    return Err(ProtocolError::InvalidControl("transcript"));
+                }
             }
             Self::TtsStart { sample_rate, .. } if *sample_rate != AUDIO_SAMPLE_RATE => {
                 return Err(ProtocolError::InvalidControl("sample rate"));
@@ -692,6 +711,12 @@ mod tests {
             AudioHeader::decode(&valid[..19]),
             Err(ProtocolError::InvalidAudioHeaderLength)
         );
+        let mut zero_turn = valid;
+        zero_turn[4..12].fill(0);
+        assert_eq!(
+            AudioHeader::decode(&zero_turn),
+            Err(ProtocolError::InvalidTurnId)
+        );
     }
 
     #[test]
@@ -723,6 +748,13 @@ mod tests {
             decode_audio_frame(&large, 8),
             Err(ProtocolError::AudioPayloadTooLarge)
         );
+
+        let mut device_oversized = encoded_header.to_vec();
+        device_oversized.extend_from_slice(&vec![0; MAX_AUDIO_PAYLOAD_BYTES + 2]);
+        assert_eq!(
+            decode_audio_frame(&device_oversized, MAX_AUDIO_PAYLOAD_BYTES),
+            Err(ProtocolError::AudioPayloadTooLarge)
+        );
     }
 
     #[test]
@@ -739,6 +771,7 @@ mod tests {
         );
         for invalid in [
             "1",
+            "0000000000000000",
             "00000000000000000",
             "00000000000000xz",
             "+000000000000001",
@@ -746,12 +779,13 @@ mod tests {
         ] {
             assert_eq!(invalid.parse::<TurnId>(), Err(ProtocolError::InvalidTurnId));
         }
+        assert!(std::panic::catch_unwind(|| TurnId::new(0)).is_err());
     }
 
     #[test]
     fn decodes_and_validates_client_controls() {
         let hello = decode_control_message(
-            r#"{"v":2,"type":"hello","firmware":"ha-voice-hermes/0.2.0","input":"pcm_s16le_16000_mono","output":"pcm_s16le_16000_mono","barge_in":true}"#,
+            r#"{"v":2,"type":"hello","firmware":"ha-voice-hermes/0.3.0","input":"pcm_s16le_16000_mono","output":"pcm_s16le_16000_mono","barge_in":true}"#,
             MAX_CONTROL_MESSAGE_BYTES,
         )
         .unwrap();
@@ -892,6 +926,27 @@ mod tests {
         assert_eq!(
             decode_control_message(r#"{"v":2,"type":"ping"}"#, 8),
             Err(ProtocolError::ControlMessageTooLarge)
+        );
+    }
+
+    #[test]
+    fn transcript_controls_have_independent_utf8_byte_and_character_bounds() {
+        let turn_id = TurnId::new(1);
+        let valid = ControlMessage::TranscriptFinal {
+            v: PROTOCOL_VERSION,
+            turn_id,
+            text: "x".repeat(MAX_TRANSCRIPT_BYTES),
+        };
+        assert!(valid.validate().is_ok());
+
+        let byte_oversized = ControlMessage::TranscriptFinal {
+            v: PROTOCOL_VERSION,
+            turn_id,
+            text: "é".repeat(MAX_TRANSCRIPT_BYTES / 2 + 1),
+        };
+        assert_eq!(
+            byte_oversized.validate(),
+            Err(ProtocolError::InvalidControl("transcript"))
         );
     }
 

@@ -15,7 +15,7 @@ use worker::{event, Context, Env, Method, Request, Response, Result as WorkerRes
 
 use config::{valid_device_id, Config};
 use error::{ApiError, ApiResult};
-use text::prepare_for_tts;
+use text::prepare_for_tts_strict;
 use wav::{validate_wav, WavError};
 
 #[derive(Serialize)]
@@ -26,6 +26,11 @@ struct HealthResponse<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     stt_provider: Option<&'a str>,
     realtime: bool,
+}
+
+#[derive(Serialize)]
+struct ReadinessResponse<'a> {
+    status: &'a str,
 }
 
 #[event(fetch)]
@@ -55,21 +60,41 @@ async fn dispatch(mut request: Request, env: &Env) -> ApiResult<Response> {
     let path = request.path();
     match (request.method(), path.as_str()) {
         (Method::Get, "/health") => health(env),
+        (Method::Get, "/healthz") => readiness(env),
         (Method::Get, "/v2/realtime") => realtime::upgrade(request, env).await,
         (Method::Post, "/v1/voice") => voice(&mut request, env).await,
         (_, "/health") => method_not_allowed("GET"),
-        (_, "/v1/voice") => method_not_allowed("POST"),
+        (_, "/healthz") => method_not_allowed("GET"),
+        (_, "/v1/voice") => match Config::from_env(env) {
+            Ok(config) if config.diagnostic_v1_enabled => method_not_allowed("POST"),
+            _ => Err(ApiError::new(404, "not_found", "Route not found")),
+        },
         (_, "/v2/realtime") => method_not_allowed("GET"),
         _ => Err(ApiError::new(404, "not_found", "Route not found")),
     }
 }
 
-fn health(env: &Env) -> ApiResult<Response> {
-    match Config::from_env(env).and_then(|config| {
+fn configured_runtime(env: &Env) -> ApiResult<Config> {
+    Config::from_env(env).and_then(|config| {
         env.durable_object("VOICE_SESSIONS")
             .map(|_| config)
             .map_err(|_| ApiError::configuration())
-    }) {
+    })
+}
+
+fn readiness(env: &Env) -> ApiResult<Response> {
+    let (status, code) = if configured_runtime(env).is_ok() {
+        ("ok", 200)
+    } else {
+        ("unavailable", 503)
+    };
+    Response::from_json(&ReadinessResponse { status })
+        .map(|response| response.with_status(code))
+        .map_err(|_| ApiError::internal())
+}
+
+fn health(env: &Env) -> ApiResult<Response> {
+    match configured_runtime(env) {
         Ok(config) => Response::from_json(&HealthResponse {
             status: "ok",
             service: "ha-voice-hermes-gateway",
@@ -92,6 +117,9 @@ fn health(env: &Env) -> ApiResult<Response> {
 
 async fn voice(request: &mut Request, env: &Env) -> ApiResult<Response> {
     let config = Config::from_env(env)?;
+    if !config.diagnostic_v1_enabled {
+        return Err(ApiError::new(404, "not_found", "Route not found"));
+    }
     require_wav_content_type(request)?;
 
     let device_id = request
@@ -112,10 +140,8 @@ async fn voice(request: &mut Request, env: &Env) -> ApiResult<Response> {
 
     let transcript = providers::transcribe(&config, &wav).await?;
     let hermes_response = providers::ask_hermes(&config, &device_id, &transcript).await?;
-    let spoken_text = prepare_for_tts(&hermes_response);
-    if spoken_text.is_empty() {
-        return Err(ApiError::upstream("hermes"));
-    }
+    let spoken_text =
+        prepare_for_tts_strict(&hermes_response).ok_or_else(|| ApiError::upstream("hermes"))?;
     providers::synthesize(&config, &spoken_text).await
 }
 
