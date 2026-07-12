@@ -56,11 +56,37 @@ readonly HEALTH_OUTPUT="${ARTIFACT_DIR}/health.json"
 containers=()
 
 cleanup() {
+  local exit_code=$?
   local name
+  local cleanup_failed=false
+  trap - EXIT
   for name in "${containers[@]}"; do
     "$DOCKER" rm --force "$name" >/dev/null 2>&1 || true
   done
-  rm -rf -- "$TEST_ROOT"
+  # workerd deliberately owns its persistent state as the dedicated UID 1000.
+  # GitHub's host runner uses a different unprivileged UID and therefore cannot
+  # traverse that bind-mounted directory during a plain rm -rf. Remove only
+  # this test root through the already-audited image, without network access,
+  # and then let the host remove the empty mount root.
+  if [[ -d $TEST_ROOT ]]; then
+    "$DOCKER" run --rm \
+      --network none \
+      --read-only \
+      --cap-drop ALL \
+      --cap-add DAC_OVERRIDE \
+      --security-opt no-new-privileges \
+      --entrypoint /usr/bin/find \
+      --volume "${TEST_ROOT}:/cleanup" \
+      "$IMAGE" \
+      /cleanup -xdev -mindepth 1 -delete >/dev/null 2>&1 \
+      || cleanup_failed=true
+    rm -rf -- "$TEST_ROOT" || cleanup_failed=true
+  fi
+  if [[ $cleanup_failed == true ]]; then
+    printf 'FAIL: could not remove the isolated smoke-test directory\n' >&2
+    [[ $exit_code -ne 0 ]] || exit_code=1
+  fi
+  exit "$exit_code"
 }
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
