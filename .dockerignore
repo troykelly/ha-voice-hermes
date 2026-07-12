@@ -1,0 +1,15 @@
+*
+!.node-version
+!rust-toolchain.toml
+!scripts/
+scripts/*
+!scripts/Dockerfile.gateway-worker
+!scripts/build-gateway-worker.sh
+!gateway/
+gateway/*
+!gateway/Cargo.lock
+!gateway/Cargo.toml
+!gateway/package-lock.json
+!gateway/package.json
+!gateway/src/
+!gateway/src/**

@@ -170,7 +170,24 @@ npx vitest run --max-workers=1 --no-isolate
 npx wrangler deploy --dry-run --outdir /tmp/wrangler-dry-run
 ```
 
-The recorded 2026-07-12 result is 85 passing Rust tests and 14 passing tests against the optimized, compiled Worker in workerd. The runtime suite includes a complete two-turn mocked Scribe WebSocket → fragmented Hermes SSE → multi-context ElevenLabs TTS WebSocket exchange; odd provider PCM event-boundary reframing and byte-exact device audio; `previous_response_id` continuity; transcript non-disclosure to the device; TTS-before-Hermes-terminal streaming; fail-closed redirects and Hermes status/media-type validation; Durable Object eviction; reset idempotency; socket replacement; exact durable-quota enforcement before reset/ping side effects; and the aggregate decoded-output ceiling. This synthetic coverage does not replace live-provider or physical Voice PE testing.
+`npm run build` is the native development build. Native Rust/LLVM,
+wasm-bindgen, Binaryen and esbuild output varies by host OS and architecture.
+Build the byte-reviewed App artifact from the repository root, then verify or
+refresh its vendored copy, with:
+
+```sh
+scripts/build-gateway-worker-canonical.sh
+scripts/sync-addon-worker-artifacts.sh --check
+# Maintainers only, after reviewing an intentional source change:
+scripts/sync-addon-worker-artifacts.sh --update
+```
+
+The canonical builder fixes Linux/amd64, the Rust base-image digest, Rust
+1.96.0, Node.js 22.22.3 and its archive checksum, and worker-build 0.8.4 with
+its locked dependency graph. It also builds from a deny-by-default Docker
+context so local credentials and unrelated files never reach the builder.
+
+The recorded 2026-07-12 result is 86 passing Rust tests and 14 passing tests against the optimized, compiled Worker in workerd. The runtime suite includes a complete two-turn mocked Scribe WebSocket → fragmented Hermes SSE → multi-context ElevenLabs TTS WebSocket exchange; odd provider PCM event-boundary reframing and byte-exact device audio; `previous_response_id` continuity; transcript non-disclosure to the device; TTS-before-Hermes-terminal streaming; fail-closed redirects and Hermes status/media-type validation; Durable Object eviction; reset idempotency; socket replacement; exact durable-quota enforcement before reset/ping side effects; and the aggregate decoded-output ceiling. This synthetic coverage does not replace live-provider or physical Voice PE testing.
 
 For local runtime testing:
 

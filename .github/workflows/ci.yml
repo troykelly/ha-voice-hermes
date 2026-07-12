@@ -71,10 +71,9 @@ jobs:
           cargo audit
       - name: Audit JavaScript dependencies
         run: npm audit --audit-level=high
-      - name: Install pinned Worker builder
-        run: cargo install worker-build --version 0.8.4 --locked
-      - name: Build optimized Worker
-        run: npm run build
+      - name: Build optimized Worker in the canonical release environment
+        working-directory: .
+        run: scripts/build-gateway-worker-canonical.sh
       - name: Verify Home Assistant App Worker artifacts
         run: ../scripts/sync-addon-worker-artifacts.sh --check
       - name: Reject developer paths in release artifacts

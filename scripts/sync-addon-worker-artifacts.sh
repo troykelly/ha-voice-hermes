@@ -16,7 +16,7 @@ hash_files() {
 
 for artifact in index.js index_bg.wasm; do
   if [[ ! -f "${source_dir}/${artifact}" ]]; then
-    echo "Missing gateway/build/${artifact}; run 'npm run build' in gateway first." >&2
+    echo "Missing gateway/build/${artifact}; run scripts/build-gateway-worker-canonical.sh first." >&2
     exit 1
   fi
 done
@@ -25,7 +25,11 @@ case "${mode}" in
   --check)
     for artifact in index.js index_bg.wasm; do
       if ! cmp -s "${source_dir}/${artifact}" "${target_dir}/${artifact}"; then
-        echo "Vendored App artifact ${artifact} is stale; run this script with --update." >&2
+        echo "Vendored App artifact ${artifact} is stale." >&2
+        echo "From the repository root, run scripts/build-gateway-worker-canonical.sh" >&2
+        echo "and then scripts/sync-addon-worker-artifacts.sh --update." >&2
+        echo "Source SHA-256: $(cd "${source_dir}" && hash_files | awk -v name="${artifact}" '$2 == name { print $1 }')" >&2
+        echo "App SHA-256:    $(cd "${target_dir}" && hash_files | awk -v name="${artifact}" '$2 == name { print $1 }')" >&2
         exit 1
       fi
     done

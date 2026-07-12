@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+# The platform-specific digest deliberately fixes the native wasm-bindgen,
+# Binaryen, and esbuild executables used for the release bundle.
+FROM rust@sha256:c993d32d95cc146bd12c84d66f0b924a6a96f3988325f39c144f2f9893dea120 AS builder
+
+ARG NODE_VERSION=22.22.3
+ARG NODE_ARCHIVE_SHA256=2e5d13569282d016861fae7c8f935e741693c269101a5bebcf761a5376d1f99f
+ARG RUST_VERSION=1.96.0
+
+RUN curl --fail --location --silent --show-error \
+      --output /tmp/node.tar.xz \
+      "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+    && echo "${NODE_ARCHIVE_SHA256}  /tmp/node.tar.xz" | sha256sum --check --strict \
+    && mkdir -p /opt/node \
+    && tar --extract --xz --file /tmp/node.tar.xz --strip-components=1 --directory /opt/node \
+    && rm /tmp/node.tar.xz
+
+ENV PATH="/opt/node/bin:/usr/local/cargo/bin:${PATH}"
+
+RUN rustup target add wasm32-unknown-unknown \
+    && cargo install worker-build --version 0.8.4 --locked
+
+WORKDIR /workspace/gateway
+
+COPY gateway/package.json gateway/package-lock.json ./
+RUN npm ci
+
+COPY rust-toolchain.toml .node-version /workspace/
+RUN test "$(cat /workspace/.node-version)" = "${NODE_VERSION}" \
+    && test "$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' /workspace/rust-toolchain.toml)" = "${RUST_VERSION}"
+COPY scripts/build-gateway-worker.sh /workspace/scripts/build-gateway-worker.sh
+COPY gateway/Cargo.toml gateway/Cargo.lock ./
+COPY gateway/src ./src
+
+RUN npm run build
+
+FROM scratch AS artifact
+
+COPY --from=builder /workspace/gateway/build/index.js /index.js
+COPY --from=builder /workspace/gateway/build/index_bg.wasm /index_bg.wasm

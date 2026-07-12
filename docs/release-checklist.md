@@ -14,8 +14,9 @@ gates below pass.
 
 - Secret/history scan has no unresolved finding.
 - Rust formatting, unit tests and strict Clippy pass with the pinned toolchain.
-- Optimized Worker build, Workers-runtime Vitest suite and Wrangler dry run
-  pass from `npm ci`.
+- The optimized Worker is regenerated and byte-compared with the App copy in a
+  pinned Linux/amd64 builder. Workers-runtime Vitest and Wrangler dry run pass
+  against that canonical bundle.
 - `npm audit` and the selected Rust advisory scanner report no unresolved
   applicable vulnerability.
 - Factory ESPHome configuration validates and compiles with the pinned ESPHome

@@ -66,6 +66,20 @@ npx vitest run --max-workers=1 --no-isolate
 npx wrangler deploy --dry-run --outdir /tmp/wrangler-dry-run
 ```
 
+That native build is appropriate for development. The App freshness and
+release checks use the fixed Linux/amd64 toolchain instead; from the repository
+root run:
+
+```sh
+scripts/build-gateway-worker-canonical.sh
+scripts/sync-addon-worker-artifacts.sh --check
+scripts/check-gateway-artifact-privacy.sh
+```
+
+Do not replace the vendored App bytes with a macOS, Linux/arm64, or otherwise
+native build. Those toolchains can emit semantically equivalent but
+byte-different WASM even with identical Rust and Node versions.
+
 Native Rust tests do not exercise Cloudflare WebSocket bindings or Durable Object hibernation. The Vitest Workers-pool suite runs the compiled Worker and a routed auxiliary provider Worker inside workerd. It deliberately evicts the Durable Object while its socket is open, verifies hibernation attachment/recovery, replaces an authenticated socket without resetting the persisted 24-hour usage window, and drives two complete realtime turns through mocked outbound WebSockets and fragmented SSE. The optimized WASM build and Wrangler dry-run remain separate gates.
 
 The full-turn fixture sends irregular provider PCM event sizes, including odd-byte boundaries, and requires the gateway to emit contiguous 2,048-byte device frames plus at most one final short frame with exact sequence, `first_sample`, and byte-for-byte audio reconstruction. It also proves that mutable/final transcripts are not returned to the headless device, the second Hermes request uses the first completed response ID, and first TTS audio is produced before the terminal Hermes SSE event. A separate fixture returns an STT `302` and verifies no request—or `xi-api-key`—reaches the redirect target. Credentialed Worker requests use workerd-supported manual redirect mode and then explicitly require the expected `101`, success, or exact recovery status; every `3xx` is rejected without following `Location`.

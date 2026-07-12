@@ -9,7 +9,7 @@ artifacts=(
   "${root}/ha_voice_hermes_gateway/gateway-build/index_bg.wasm"
 )
 
-patterns='(/Users/[^/[:space:]]+|/home/[^/[:space:]]+|[A-Za-z]:\\Users\\[^\\[:space:]]+)'
+patterns='(/Users/[^/[:space:]]+|/home/[^/[:space:]]+|/root/[^/[:space:]]+|/usr/local/cargo/[^/[:space:]]+|[A-Za-z]:\\Users\\[^\\[:space:]]+)'
 for artifact in "${artifacts[@]}"; do
   if [[ ! -f "${artifact}" ]]; then
     echo "Missing release artifact: ${artifact#"${root}/"}" >&2

@@ -377,6 +377,16 @@ npx vitest run --max-workers=1 --no-isolate
 npx wrangler deploy --dry-run --outdir /tmp/wrangler-dry-run
 ```
 
+For the Home Assistant App bundle, return to the repository root and use the
+pinned Linux/amd64 builder; a native developer build is not a byte-reproducible
+release artifact across host platforms:
+
+```sh
+scripts/build-gateway-worker-canonical.sh
+scripts/sync-addon-worker-artifacts.sh --check
+scripts/check-gateway-artifact-privacy.sh
+```
+
 Deploying the first version creates the `VoiceSession` SQLite class through the declared migration:
 
 ```sh
