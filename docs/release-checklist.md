@@ -33,6 +33,13 @@ gates below pass.
   dependencies, runs the container smoke suite on each architecture, generates
   an SPDX JSON SBOM, and fails on fixed high/critical Trivy findings or detected
   image secrets.
+- The App tag workflow fails before any package write unless the locked
+  Rust/WASM notice closure, network-refreshed release-complete native `workerd`
+  inventory, exact base-container component inventory, exact-main-head tag,
+  immutable-tag ruleset, and GitHub native immutable-Release setting all
+  validate without drift. It writes only to new private run-specific staging
+  packages until the complete `ha_voice_hermes_gateway/licenses` tree and
+  corresponding source are published in the immutable Release.
 - App option-validation and container tests cover the standard
   `/ssl/fullchain.pem` and `/ssl/privkey.pem` path, invalid/mismatched/path-escape
   or non-publicly-trusted certificate files, TLS restart/reconnect, Access pairing, unique device
@@ -46,23 +53,19 @@ gates below pass.
 
 ## Manual release-artifact gates
 
-- **Open legal-distribution gate (12 July 2026):** the current App image's
-  project MIT and Apache files are not a complete third-party notice bundle.
-  The locked WASM runtime includes Unicode-3.0 components and `matchit 0.7.3`
-  (`MIT AND BSD-3-Clause`, including its httprouter notice). The Home Assistant
-  base also contributes non-dpkg Bashio and s6-overlay/skarnet components whose
-  notices are not currently copied into the project bundle. Generate and
-  review the exact locked runtime/container inventory, include every required
-  verbatim copyright/license notice in the repository and image, and add a CI
-  regeneration/diff gate before publishing. Do not infer completeness from the
-  two generic license texts or the vulnerability SBOM.
+- Review the generated Rust/WASM dependency closure, base-container component
+  inventory and corresponding verbatim notice files. Their regeneration/diff
+  checks are release-blocking, but machine consistency does not replace the
+  maintainer's legal-distribution review.
 - Review the CI-generated SBOM for each architecture and archive one for each
   exact published digest.
 - Re-run the image CVE/secret scan against the exact release digests and resolve
   or explicitly document every applicable finding; the moving advisory database
   can change after CI completes.
 - Produce and review a dependency/license inventory and the corresponding
-  license/notice bundle.
+  license/notice bundle. Verify the Debian binary-to-source lock against both
+  exact images and review the corresponding-source archive and its signed
+  checksum.
 - Inspect image layers, build logs, and published manifests for secrets,
   unexpected files, mutable dependencies, architecture drift, and source-path
   PII. Existing smoke/privacy checks help, but do not replace this release
@@ -96,32 +99,74 @@ evidence.
    the `version` field in `ha_voice_hermes_gateway/config.yaml`.
 2. Set the public firmware package's component ref and Dashboard Import ref to
    its exact proposed semantic version tag.
-3. Commit the release candidate, merge that exact reviewed commit to `main`, and
-   rerun every implemented automated, manual-artifact, and physical gate.
+3. Commit the release candidate and **squash-merge** PR #1 using the repository's
+   enforced squash-only merge policy, then delete the feature branch. Do not
+   merge-commit or rebase-merge it: a tag executes the workflow at the tagged
+   commit, and older feature-branch publication workflows must never become
+   `main` ancestors. Re-run every implemented automated, manual-artifact, and
+   physical gate on the resulting single `main` commit.
 4. Create the signed immutable firmware/source tag required by the package, then
    run `scripts/verify-release-ref.sh <tag>` with ESPHome against an anonymous
    clone.
-5. Create and push a signed App tag named
-   `app-v<ha_voice_hermes_gateway/config.yaml version>` from the same `main`
-   commit, for example `app-v0.1.0`. It must be an annotated tag whose signature
-   GitHub verifies. Protect `app-v*` with a repository tag ruleset. The publish
-   workflow rejects a mismatched version, a commit outside `main`, or a version
-   tag already present in GHCR; never delete or move a release tag.
-6. Let the App workflow build, keyless-sign, and publish the architecture images
-   under commit-SHA staging tags, create and sign the staging multi-architecture
-   digest only after both architectures pass, then promote that exact digest to
-   the versioned/`latest` tags and verify digest equality. A first
-   publish may create a private package; if so, explicitly change the package
-   visibility to public and rerun the failed **Verify anonymous installability**
-   job. If `latest` promotion fails after the signed immutable version is
-   created, repair only `latest`; never delete/reuse the version.
-7. Without registry credentials, inspect/pull the exact versioned GHCR manifest.
-   Then add the repository to a clean Home Assistant App store and complete an
-   anonymous install/start check on each supported architecture.
-8. Publish the factory/WebSerial and multi-architecture App artifacts, checksums,
-   signatures, reviewed SBOM, license/notice bundle, source link, hardware test
-   record, and App install/backup/restore record together.
-9. Re-run clean Dashboard Import and first/hardened OTA from the published URL.
+5. Add the Actions repository secret `RELEASE_POLICY_TOKEN` using a short-lived
+   fine-grained token restricted to this repository with only
+   **Administration: read**; never reuse a broad CLI, App, provider, or device
+   credential. The normal job-scoped `GITHUB_TOKEN` retains all write duties.
+   Enable GitHub's repository-level [immutable Releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases),
+   and activate a no-bypass repository tag ruleset whose only include is
+   `refs/tags/app-v*`, with no excludes and both **Restrict updates** and
+   **Restrict deletions**. Then create and push a signed App tag named
+   `app-v<ha_voice_hermes_gateway/config.yaml version>` from the exact current
+   `main` head, for example `app-v0.1.0`. It must be an annotated tag whose
+   signature GitHub verifies. The hardened workflow requires its target to equal
+   `origin/main` exactly and rejects an older main commit, a mismatched version,
+   or a version tag already present in GHCR; never delete or move a release tag.
+6. Let the App workflow build and keyless-sign the architecture images in new
+   run-ID-namespaced GHCR staging packages. The preflight must see each main/arch
+   staging package as absent or private, and post-push checks must prove all
+   three remain private. Generate/attest exact-digest all-layer SBOMs and the
+   private staging multi-architecture digest. Never make a staging package
+   public.
+7. While staging remains private, verify every image signature,
+   provenance/SBOM attestation and standalone SBOM; create deterministic
+   embedded-license and per-architecture Debian-copyright archives; verify both
+   architectures against the Debian source lock; build the corresponding-source
+   archive from immutable Debian snapshots; and keyless-sign `SHA256SUMS`.
+8. Publish the source/evidence GitHub Release **before** distributing the App
+   binary. The job must create a draft, upload through GitHub's Release uploader,
+   byte-verify the complete set, publish it non-draft/non-prerelease, require
+   GitHub to report it immutable, then verify the native release attestation and
+   every local asset. At this point the Release is a complete public source
+   offer; it is not yet an image-installability claim.
+9. Only after that immutable Release succeeds, let the separately permissioned
+   promotion job copy the exact digest from private staging to the public
+   versioned and `latest` tags, verify both, then keyless-sign and attest the
+   public reference. A fresh job with no registry login must resolve both tags,
+   pull `amd64` and `arm64`, and verify the public signature and promotion
+   provenance. If the new public package is private by default, make only
+   `ha-voice-hermes-gateway` public and re-run **failed jobs** in this same run;
+   never expose the staging packages. Source-first ordering is deliberate, and
+   no atomic image-plus-Release publication claim is made.
+10. For any partial write/upload/sign/attest/visibility failure, use **Re-run
+    failed jobs**, not **Re-run all jobs**, on the same workflow run. Its
+    run-specific private staging packages and 90-day evidence artifact are the
+    recovery boundary. A retry may accept only the exact Release asset set and
+    version digest. Promotion must also prove its immutable `app-v*` Release is
+    still the newest published App Release, so a delayed older retry cannot
+    roll `latest` backward. If that recovery state expires, or a newer App
+    Release now exists, publish a new version rather than rebuilding behind an
+    immutable Release.
+11. Independently run `gh release verify app-v<version>`, download the Release
+    assets, and run `gh release verify-asset app-v<version> <path>` for every
+    asset. Also verify `SHA256SUMS` and its Sigstore bundle, inspect/pull the
+    image digest, then add the repository to a clean Home Assistant App store
+    and complete an anonymous install/start check on each supported
+    architecture.
+12. Publish the separately built and physically validated factory/WebSerial
+    assets with the signed firmware/source release. The App Release deliberately
+    contains no fabricated factory binary. Publish the hardware test and App
+    install/backup/restore records, then re-run clean Dashboard Import and
+    first/hardened OTA from the published firmware URL.
 
 If a release must be withdrawn, publish a new version and mark the old release
 unsupported. Never move an existing device-installation tag.

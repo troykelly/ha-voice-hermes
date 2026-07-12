@@ -1,5 +1,4 @@
 *
-!.node-version
 !rust-toolchain.toml
 !scripts/
 scripts/*
@@ -9,7 +8,5 @@ scripts/*
 gateway/*
 !gateway/Cargo.lock
 !gateway/Cargo.toml
-!gateway/package-lock.json
-!gateway/package.json
 !gateway/src/
 !gateway/src/**

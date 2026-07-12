@@ -44,3 +44,4 @@ gateway/.wrangler/
 gateway/build/
 gateway/node_modules/
 gateway/target/
+ha_voice_hermes_gateway/node_modules/

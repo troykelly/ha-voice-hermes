@@ -1,0 +1,14 @@
+# Deny by default so local credentials, test artifacts, and node_modules can
+# never enter the App build context accidentally.
+*
+!Dockerfile
+!package.json
+!package-lock.json
+!rootfs/
+!rootfs/**
+!gateway-build/
+!gateway-build/index.js
+!gateway-build/index_bg.wasm
+!gateway-build/SHA256SUMS
+!licenses/
+!licenses/**

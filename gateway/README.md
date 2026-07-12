@@ -182,10 +182,14 @@ scripts/sync-addon-worker-artifacts.sh --check
 scripts/sync-addon-worker-artifacts.sh --update
 ```
 
-The canonical builder fixes Linux/amd64, the Rust base-image digest, Rust
-1.96.0, Node.js 22.22.3 and its archive checksum, and worker-build 0.8.4 with
-its locked dependency graph. It also builds from a deny-by-default Docker
-context so local credentials and unrelated files never reach the builder.
+The canonical artifact builder has no Node/npm dependency. It fixes
+Linux/amd64, the Rust base-image digest, Rust 1.96.0, worker-build 0.8.4 with
+its locked dependency graph, and the exact wasm-bindgen 0.2.126, Binaryen 130,
+and esbuild 0.28.0 native archives. Each native archive is verified against a
+reviewed upstream digest before execution. The builder also uses a
+deny-by-default Docker context so local credentials and unrelated files never
+reach it. Node.js remains pinned for Wrangler and runtime tests outside that
+artifact-only build.
 
 The recorded 2026-07-12 result is 86 passing Rust tests and 14 passing tests against the optimized, compiled Worker in workerd. The runtime suite includes a complete two-turn mocked Scribe WebSocket → fragmented Hermes SSE → multi-context ElevenLabs TTS WebSocket exchange; odd provider PCM event-boundary reframing and byte-exact device audio; `previous_response_id` continuity; transcript non-disclosure to the device; TTS-before-Hermes-terminal streaming; fail-closed redirects and Hermes status/media-type validation; Durable Object eviction; reset idempotency; socket replacement; exact durable-quota enforcement before reset/ping side effects; and the aggregate decoded-output ceiling. This synthetic coverage does not replace live-provider or physical Voice PE testing.
 

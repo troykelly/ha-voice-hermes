@@ -1,0 +1,5 @@
+# Release SBOMs must include deleted-layer material if image construction ever
+# regresses away from the current scratch-flattened boundary.
+scope: all-layers
+license:
+  content: all

@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "home_assistant_base": {
+    "reference": "ghcr.io/home-assistant/base-debian:bookworm@sha256:8c7a9e207425e79b6b2ed1628a2b6727fa6e518d9fdddcbe3b1ac20440e70492",
+    "version": "2026.06.1",
+    "source": "https://github.com/home-assistant/docker-base/tree/d2bed106f864a4f7b3599b5151661ae6dc617c61",
+    "debian_package_notices": "/usr/share/doc/<package>/copyright"
+  },
+  "components": [
+    {
+      "name": "bashio",
+      "version": "0.17.5",
+      "license": "MIT",
+      "source": "https://github.com/hassio-addons/bashio/tree/f788a0b8e944c5fed623225fe37af8dda97ac2f2",
+      "runtime_path": "/usr/lib/bashio",
+      "notice_file": "bashio-0.17.5-MIT.txt",
+      "notice_sha256": "7738050aa385554c6b081786724f110945fdf343248aa8b048951a8e2d5bd6bf"
+    },
+    {
+      "name": "s6-overlay",
+      "version": "3.2.2.0",
+      "license": "ISC",
+      "source": "https://github.com/just-containers/s6-overlay/tree/de115a73187436817aa2640e92e5d0281e1e0236",
+      "runtime_path": "/package/admin/s6-overlay-3.2.2.0",
+      "notice_file": "s6-overlay-3.2.2.0-ISC.txt",
+      "notice_sha256": "7184c7d1dae02fc4a23e0d2cda2c8a107ba08fbc0158bc25f4d0f404941780db"
+    },
+    {
+      "name": "s6-overlay-helpers",
+      "version": "0.1.2.1",
+      "license": "ISC",
+      "source": "https://github.com/just-containers/s6-overlay-helpers/tree/0344dc1849e6e8d6921cc477073c8c0ad1d4f87b",
+      "runtime_path": "/package/admin/s6-overlay-helpers-0.1.2.1",
+      "notice_file": "s6-overlay-helpers-0.1.2.1-ISC.txt",
+      "notice_sha256": "79fc1f1a6aa64704f6842c3a56f6409bae985ebc61e2f05ac5cb44949c68f5a3"
+    },
+    {
+      "name": "skalibs",
+      "version": "2.14.5.1",
+      "license": "ISC",
+      "source": "https://github.com/skarnet/skalibs/tree/4f9abc77dfe3046477cdcf6da4b487fc6c318b2a",
+      "runtime_path": "/package/prog/skalibs-2.14.5.1",
+      "notice_file": "skarnet-2011-2026-ISC.txt",
+      "notice_sha256": "26bee3a3c78ae6a29c81c18832cadb1a4433cf8a786624312f11667d93fcce41"
+    },
+    {
+      "name": "execline",
+      "version": "2.9.8.1",
+      "license": "ISC",
+      "source": "https://github.com/skarnet/execline/tree/bf34a2087af1f90cfa004a552c967b2e5382ca59",
+      "runtime_path": "/package/admin/execline-2.9.8.1",
+      "notice_file": "skarnet-2011-2026-ISC.txt",
+      "notice_sha256": "26bee3a3c78ae6a29c81c18832cadb1a4433cf8a786624312f11667d93fcce41"
+    },
+    {
+      "name": "s6",
+      "version": "2.14.0.1",
+      "license": "ISC",
+      "source": "https://github.com/skarnet/s6/tree/c610b21bc606ae4a56c48c671b1d015b35ce3303",
+      "runtime_path": "/package/admin/s6-2.14.0.1",
+      "notice_file": "skarnet-2011-2026-ISC.txt",
+      "notice_sha256": "26bee3a3c78ae6a29c81c18832cadb1a4433cf8a786624312f11667d93fcce41"
+    },
+    {
+      "name": "s6-linux-init",
+      "version": "1.2.0.0",
+      "license": "ISC",
+      "source": "https://github.com/skarnet/s6-linux-init/tree/87808c2c12a93e46b9bc4ef0ac992e70c9e5e1b9",
+      "runtime_path": "/package/admin/s6-linux-init-1.2.0.0",
+      "notice_file": "skarnet-2015-2025-ISC.txt",
+      "notice_sha256": "c9dc0e0a938cf767204b98f4e9bf148e5341d5f237c81e8e1c77d6a52b9e7e28"
+    },
+    {
+      "name": "s6-linux-utils",
+      "version": "2.6.4.0",
+      "license": "ISC",
+      "source": "https://github.com/skarnet/s6-linux-utils/tree/6623b6180743596f083e21d319b42f8456975a1d",
+      "runtime_path": "/package/admin/s6-linux-utils-2.6.4.0",
+      "notice_file": "skarnet-2011-2025-ISC.txt",
+      "notice_sha256": "cadf2c7d05a2c425250211c01db2ff33fa2bc31e293c8c040227b046ce1cb77f"
+    },
+    {
+      "name": "s6-portable-utils",
+      "version": "2.3.1.1",
+      "license": "ISC",
+      "source": "https://github.com/skarnet/s6-portable-utils/tree/93f521eb8c444dea0ae297e9f961a950c93d9575",
+      "runtime_path": "/package/admin/s6-portable-utils-2.3.1.1",
+      "notice_file": "skarnet-2011-2025-ISC.txt",
+      "notice_sha256": "cadf2c7d05a2c425250211c01db2ff33fa2bc31e293c8c040227b046ce1cb77f"
+    },
+    {
+      "name": "s6-rc",
+      "version": "0.6.0.0",
+      "license": "ISC",
+      "source": "https://github.com/skarnet/s6-rc/tree/3c61b2916c56bfa8d3ce7a6a5480eb93c2ed1470",
+      "runtime_path": "/package/admin/s6-rc-0.6.0.0",
+      "notice_file": "skarnet-2015-2026-ISC.txt",
+      "notice_sha256": "707d16cb74596c19098c093b09825113642e8252bc97125e9bc424b75f3e27cc"
+    },
+    {
+      "name": "s6-networking",
+      "version": "2.7.2.1",
+      "license": "ISC",
+      "source": "https://github.com/skarnet/s6-networking/tree/e38ccbf6fe441c41410fc9e03f71dd88f7ce1a15",
+      "runtime_path": "/package/net/s6-networking-2.7.2.1",
+      "notice_file": "skarnet-2011-2026-ISC.txt",
+      "notice_sha256": "26bee3a3c78ae6a29c81c18832cadb1a4433cf8a786624312f11667d93fcce41"
+    },
+    {
+      "name": "BearSSL",
+      "version": "3d9be2f60b7764e46836514bcd6e453abdfa864a",
+      "license": "MIT",
+      "source": "https://www.bearssl.org/gitweb/?p=BearSSL;a=commit;h=3d9be2f60b7764e46836514bcd6e453abdfa864a",
+      "embedded_in": "s6-networking",
+      "notice_file": "bearssl-3d9be2f60b7764e46836514bcd6e453abdfa864a-MIT.txt",
+      "notice_sha256": "771bf18c8633ea69ec9b07d2e604c4b99b7bef41b0f5ce6385d24df4448f61ca"
+    },
+    {
+      "name": "s6-dns",
+      "version": "2.4.1.1",
+      "license": "ISC",
+      "source": "https://github.com/skarnet/s6-dns/tree/8b27fed89fe3607e0bbfb86f93c51888deade6e7",
+      "runtime_path": "/package/web/s6-dns-2.4.1.1",
+      "notice_file": "skarnet-2011-2025-ISC.txt",
+      "notice_sha256": "cadf2c7d05a2c425250211c01db2ff33fa2bc31e293c8c040227b046ce1cb77f"
+    },
+    {
+      "name": "workerd",
+      "version": "1.20260708.1",
+      "license": "Apache-2.0",
+      "source": "https://github.com/cloudflare/workerd/tree/99057e45cb7152cc5efc59b8d2182386fe1e3eec",
+      "runtime_path": "/usr/local/bin/workerd",
+      "notice_file": "../Apache-2.0.txt",
+      "notice_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "upstream_notice": "The tagged workerd source has no NOTICE file."
+    }
+  ]
+}

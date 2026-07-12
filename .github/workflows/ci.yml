@@ -74,6 +74,17 @@ jobs:
       - name: Build optimized Worker in the canonical release environment
         working-directory: .
         run: scripts/build-gateway-worker-canonical.sh
+      - name: Verify complete generated runtime notice bundles
+        working-directory: .
+        run: |
+          python3 scripts/generate-wasm-third-party-notices.py --check
+          python3 scripts/generate-workerd-rust-third-party-notices.py --release-check
+          python3 scripts/refresh-workerd-native-notices.py --check
+          python3 scripts/verify-workerd-native-notices.py
+          python3 -m unittest \
+            scripts/tests/test_wasm_third_party_notices.py \
+            scripts/tests/test_workerd_native_notices.py \
+            scripts/tests/test_workerd_rust_third_party_notices.py
       - name: Verify Home Assistant App Worker artifacts
         run: ../scripts/sync-addon-worker-artifacts.sh --check
       - name: Reject developer paths in release artifacts
@@ -96,8 +107,21 @@ jobs:
         uses: frenck/action-addon-linter@f995494fd84fae6310d23617e66d0e37de4f14eb # v2.21.0
         with:
           path: ./ha_voice_hermes_gateway
+      - name: Validate every GitHub Actions workflow
+        run: |
+          archive="${RUNNER_TEMP}/actionlint.tar.gz"
+          curl --fail --location --silent --show-error \
+            --output "${archive}" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  '"${archive}" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" \
+            --directory "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" -color
       - name: Validate repository, translation, and documentation metadata
         run: ruby scripts/validate-home-assistant-app-metadata.rb
+      - name: Verify locked container licence inventory and notices
+        run: python3 scripts/verify-container-third-party-notices.py
       - name: Avoid broken July 2026 bounded secret/string schemas
         run: |
           if grep -Eq ':[[:space:]]*"?(password|str)\(' ha_voice_hermes_gateway/config.yaml; then
@@ -107,6 +131,7 @@ jobs:
       - name: Check bootstrap shell
         run: |
           bash -n \
+            scripts/build-debian-corresponding-source.sh \
             ha_voice_hermes_gateway/rootfs/etc/services.d/gateway/finish \
             ha_voice_hermes_gateway/rootfs/etc/services.d/gateway/run \
             ha_voice_hermes_gateway/rootfs/usr/local/bin/gateway-healthcheck \
@@ -116,6 +141,7 @@ jobs:
             ha_voice_hermes_gateway/tests/docker-smoke.sh \
             ha_voice_hermes_gateway/tests/validate-options.sh
           shellcheck \
+            scripts/build-debian-corresponding-source.sh \
             ha_voice_hermes_gateway/rootfs/etc/services.d/gateway/finish \
             ha_voice_hermes_gateway/rootfs/etc/services.d/gateway/run \
             ha_voice_hermes_gateway/rootfs/usr/local/bin/gateway-healthcheck \
@@ -133,8 +159,19 @@ jobs:
           sudo apparmor_parser --skip-kernel-load ha_voice_hermes_gateway/apparmor.txt
       - name: Exercise hardened snapshot helper
         run: ha_voice_hermes_gateway/tests/secure-snapshot.sh
-      - name: Check WebSocket test client
-        run: python3 -m py_compile ha_voice_hermes_gateway/tests/wss_ready.py
+      - name: Compile Python verification helpers
+        run: |
+          python3 -m py_compile \
+            scripts/generate-debian-source-lock.py \
+            scripts/generate-wasm-third-party-notices.py \
+            scripts/generate-workerd-rust-third-party-notices.py \
+            scripts/refresh-workerd-native-notices.py \
+            scripts/verify-container-third-party-notices.py \
+            scripts/verify-workerd-native-notices.py \
+            scripts/tests/test_wasm_third_party_notices.py \
+            scripts/tests/test_workerd_native_notices.py \
+            scripts/tests/test_workerd_rust_third_party_notices.py \
+            ha_voice_hermes_gateway/tests/wss_ready.py
       - name: Audit pinned workerd package
         working-directory: ha_voice_hermes_gateway
         run: |
@@ -184,10 +221,15 @@ jobs:
           APP_START_TIMEOUT: 120
           IMAGE: local/ha-voice-hermes-gateway:${{ matrix.arch }}
         run: ha_voice_hermes_gateway/tests/docker-smoke.sh "${IMAGE}"
+      - name: Verify exact Debian binary-to-source closure
+        env:
+          IMAGE: local/ha-voice-hermes-gateway:${{ matrix.arch }}
+        run: python3 scripts/generate-debian-source-lock.py --image "${IMAGE}" --check
       - name: Generate architecture SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           artifact-name: ha-voice-hermes-gateway-${{ matrix.arch }}.spdx.json
+          config: .syft.yaml
           format: spdx-json
           image: local/ha-voice-hermes-gateway:${{ matrix.arch }}
           output-file: ${{ runner.temp }}/ha-voice-hermes-gateway-${{ matrix.arch }}.spdx.json

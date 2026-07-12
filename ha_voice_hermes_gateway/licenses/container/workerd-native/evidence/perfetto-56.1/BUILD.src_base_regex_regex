@@ -1,0 +1,20 @@
+# GN target: //src/base/regex:regex
+perfetto_cc_library(
+    name = "src_base_regex_regex",
+    srcs = [
+        "src/base/regex/regex.cc",
+    ],
+    hdrs = [
+        ":include_perfetto_base_base",
+        ":include_perfetto_ext_base_base",
+        ":include_perfetto_ext_base_regex",
+        ":include_perfetto_public_abi_base",
+        ":include_perfetto_public_base",
+        "src/base/regex/regex_re2.h",
+        "src/base/regex/regex_std.h",
+    ],
+    deps = [
+    ] + PERFETTO_CONFIG.deps.re2,
+    linkstatic = True,
+)
+

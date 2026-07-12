@@ -98,10 +98,22 @@ so a second repository is not required:
 
 **This path is not installable yet.** As of 12 July 2026 the App is on draft PR
 [#1](https://github.com/troykelly/ha-voice-hermes/pull/1), not `main`; no signed
-`app-v0.1.0` tag or public GHCR image exists. Use the steps below only after the
-reviewed merge, signed multi-architecture publish, and anonymous image-pull
-gate succeed. The App's `image:` setting means adding a development branch to
-the store cannot substitute for that published image.
+`app-v0.1.0` tag or public GHCR image exists. PR #1 must be squash-merged and
+its branch deleted so its older publication-workflow snapshots never become
+`main` ancestors. Use the steps below only after the exact-head signed release,
+source-first immutable GitHub Release, public-image signature/provenance, and
+anonymous dual-architecture pull gate succeed. The App's `image:` setting means
+adding a development branch to the store cannot substitute for that published
+image. The Release carries exact-digest per-architecture SBOMs, signed
+provenance/SBOM bundles, the embedded license bundle, an OCI index and signed
+checksums, plus the corresponding Debian source archive for the package closure
+verified in both images. Repository-native immutable Releases lock the final
+tag/assets and add GitHub's release attestation. Images are built and audited in
+private run-specific staging packages; this source/evidence Release becomes
+public before the exact digest is copied, signed and attested in the public
+package. The App Release deliberately
+does not substitute an unvalidated factory firmware asset for the separately
+gated firmware release.
 
 1. Open **Settings → Apps → App store**, add
    `https://github.com/troykelly/ha-voice-hermes` as a repository, and install

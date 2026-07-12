@@ -1,39 +1,67 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-# The platform-specific digest deliberately fixes the native wasm-bindgen,
-# Binaryen, and esbuild executables used for the release bundle.
+# The platform-specific digest fixes the host ABI. Every downloaded native
+# build tool is separately byte-pinned below before it can touch a release
+# artifact.
 FROM rust@sha256:c993d32d95cc146bd12c84d66f0b924a6a96f3988325f39c144f2f9893dea120 AS builder
 
-ARG NODE_VERSION=22.22.3
-ARG NODE_ARCHIVE_SHA256=2e5d13569282d016861fae7c8f935e741693c269101a5bebcf761a5376d1f99f
+ARG BINARYEN_ARCHIVE_SHA256=0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc
+ARG BINARYEN_VERSION=130
+ARG ESBUILD_ARCHIVE_SHA512=bacd1d49bf62171222f2cae7a65f77d4dbeceb98adfc97766b62b7aacedfcf659f18f1eacdfcd94df79cee8c5925134f5cf9cd619b5a9e645ce002ff2705731d
+ARG ESBUILD_VERSION=0.28.0
 ARG RUST_VERSION=1.96.0
+ARG WASM_BINDGEN_ARCHIVE_SHA256=064948d58e2d6c0a745216477a639ba696216d6309aaa902939d1b865b1d869d
+ARG WASM_BINDGEN_VERSION=0.2.126
 
-RUN curl --fail --location --silent --show-error \
-      --output /tmp/node.tar.xz \
-      "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
-    && echo "${NODE_ARCHIVE_SHA256}  /tmp/node.tar.xz" | sha256sum --check --strict \
-    && mkdir -p /opt/node \
-    && tar --extract --xz --file /tmp/node.tar.xz --strip-components=1 --directory /opt/node \
-    && rm /tmp/node.tar.xz
+RUN install -d \
+      /opt/build-tools/binaryen \
+      /opt/build-tools/esbuild \
+      /opt/build-tools/wasm-bindgen \
+    && curl --fail --location --silent --show-error \
+      --output /tmp/wasm-bindgen.tar.gz \
+      "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${WASM_BINDGEN_VERSION}/wasm-bindgen-${WASM_BINDGEN_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+    && echo "${WASM_BINDGEN_ARCHIVE_SHA256}  /tmp/wasm-bindgen.tar.gz" \
+      | sha256sum --check --strict \
+    && tar --extract --gzip --file /tmp/wasm-bindgen.tar.gz \
+      --strip-components=1 --directory /opt/build-tools/wasm-bindgen \
+    && curl --fail --location --silent --show-error \
+      --output /tmp/binaryen.tar.gz \
+      "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz" \
+    && echo "${BINARYEN_ARCHIVE_SHA256}  /tmp/binaryen.tar.gz" \
+      | sha256sum --check --strict \
+    && tar --extract --gzip --file /tmp/binaryen.tar.gz \
+      --strip-components=1 --directory /opt/build-tools/binaryen \
+    && curl --fail --location --silent --show-error \
+      --output /tmp/esbuild.tar.gz \
+      "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${ESBUILD_VERSION}.tgz" \
+    && echo "${ESBUILD_ARCHIVE_SHA512}  /tmp/esbuild.tar.gz" \
+      | sha512sum --check --strict \
+    && tar --extract --gzip --file /tmp/esbuild.tar.gz \
+      --strip-components=2 --directory /opt/build-tools/esbuild package/bin/esbuild \
+    && rm /tmp/wasm-bindgen.tar.gz /tmp/binaryen.tar.gz /tmp/esbuild.tar.gz \
+    && test "$(/opt/build-tools/wasm-bindgen/wasm-bindgen --version)" = \
+      "wasm-bindgen ${WASM_BINDGEN_VERSION}" \
+    && test "$(/opt/build-tools/binaryen/bin/wasm-opt --version)" = \
+      "wasm-opt version ${BINARYEN_VERSION} (version_${BINARYEN_VERSION})" \
+    && test "$(/opt/build-tools/esbuild/esbuild --version)" = "${ESBUILD_VERSION}"
 
-ENV PATH="/opt/node/bin:/usr/local/cargo/bin:${PATH}"
+ENV \
+  ESBUILD_BIN="/opt/build-tools/esbuild/esbuild" \
+  WASM_BINDGEN_BIN="/opt/build-tools/wasm-bindgen/wasm-bindgen" \
+  WASM_OPT_BIN="/opt/build-tools/binaryen/bin/wasm-opt"
 
 RUN rustup target add wasm32-unknown-unknown \
     && cargo install worker-build --version 0.8.4 --locked
 
 WORKDIR /workspace/gateway
 
-COPY gateway/package.json gateway/package-lock.json ./
-RUN npm ci
-
-COPY rust-toolchain.toml .node-version /workspace/
-RUN test "$(cat /workspace/.node-version)" = "${NODE_VERSION}" \
-    && test "$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' /workspace/rust-toolchain.toml)" = "${RUST_VERSION}"
+COPY rust-toolchain.toml /workspace/
+RUN test "$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' /workspace/rust-toolchain.toml)" = "${RUST_VERSION}"
 COPY scripts/build-gateway-worker.sh /workspace/scripts/build-gateway-worker.sh
 COPY gateway/Cargo.toml gateway/Cargo.lock ./
 COPY gateway/src ./src
 
-RUN npm run build
+RUN /workspace/scripts/build-gateway-worker.sh
 
 FROM scratch AS artifact
 

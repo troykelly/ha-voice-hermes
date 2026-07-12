@@ -97,23 +97,87 @@ Home Assistant installation remains gated on the immutable published image.
 ### Maintainer publication
 
 The App publisher reads `version` from `ha_voice_hermes_gateway/config.yaml`.
-After all release gates pass and the reviewed commit is merged to `main`, push a
-signed tag named `app-v<version>` from that exact commit, for example
-`app-v0.1.0`. The tag must be annotated and GitHub-verified as signed. The
-workflow rejects a tag/version mismatch, a commit outside `main`, or an already
-published version. It builds and keyless-signs native `amd64` and `aarch64`
-images under commit-SHA staging tags, then publishes the versioned and `latest`
-multi-architecture GHCR manifests only after both builds pass and the staging
-manifest is signed. Promotion verifies that both public tags resolve to that
-same signed digest. Never delete or move an `app-v*` tag; protect that pattern
-with a repository tag ruleset.
+Before tagging, create the Actions repository secret `RELEASE_POLICY_TOKEN`
+from a fine-grained personal access token restricted to this repository, with
+only **Administration: read** (and GitHub's implicit metadata read). Give it a
+short expiry and rotate it through repository settings. GitHub's ephemeral
+`GITHUB_TOKEN` cannot request that permission, so the dedicated token is used
+only for read-only ruleset and immutable-Release checks; package and Release
+writes continue to use the job-scoped `GITHUB_TOKEN`. A missing or expired
+policy token fails closed before any registry write.
 
-A first GHCR publish may leave the new package private. If the workflow's
-**Verify anonymous installability** job fails, make the package public in GHCR
-package settings and rerun that job. Before announcing the App, verify the exact
-versioned manifest without registry credentials and install it from a clean
-Home Assistant App store. The full source, artifact, physical, and anonymous
-installation gates are in the root [release checklist](../docs/release-checklist.md).
+PR #1 must be **squash-merged**, and its feature branch must then be deleted.
+The repository is configured for squash-only merges. This is a security
+boundary: a tag executes the workflow stored at the tagged commit, so the older
+feature-branch workflow snapshots must never become `main` ancestors. After all
+release gates pass, push a signed tag named `app-v<version>` from the exact
+current `main` head, for example `app-v0.1.0`. The tag must be annotated and
+GitHub-verified as signed. The hardened workflow requires the tag target to
+equal `origin/main` exactly; it rejects an older main commit, a tag/version
+mismatch, or an already published version.
+
+Before receiving package-write permission the workflow regenerates and checks
+the locked WASM, native `workerd`, and base-container third-party notice
+inventories, including the release-blocking native `workerd` closure. It then
+builds and keyless-signs native `amd64` and `aarch64` images in three dedicated
+run-ID-namespaced GHCR staging packages. Preflight accepts only absent or
+private staging packages, and the workflow rechecks all three remain private
+after upload. No staging package is an installation endpoint.
+
+While those images are private, the evidence job verifies every signature and
+attestation, compares each all-layer SPDX SBOM to its signed predicate,
+packages the complete embedded license tree and each architecture's Debian
+copyright files, verifies both images against the Debian source lock, builds
+the corresponding-source archive from pinned Debian snapshots, and signs
+`SHA256SUMS`. Only then does the source-first job create a draft, use GitHub's
+Release uploader for every asset, byte-verify the complete set, and publish a
+non-draft, non-prerelease
+[`app-v*` GitHub Release](https://github.com/troykelly/ha-voice-hermes/releases).
+GitHub's repository-level
+[immutable Releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
+must remain enabled. The workflow requires the published Release's `immutable`
+result, verifies its native release attestation and every local asset with
+`gh release verify[-asset]`, and only then allows public-image promotion.
+
+The separately permissioned promotion job copies that exact digest from private
+staging to the public versioned and `latest` tags, verifies both digests, then
+keyless-signs and attests the public repository reference. A fresh, uncredentialed
+job must finally resolve both public tags and pull `amd64` and `arm64`, verify the
+public signature, and verify promotion provenance. Source and notices therefore
+become publicly available before any App binary; public-image publication and
+the Release are deliberately **not** claimed to be atomic.
+
+The policy setting and exact no-bypass `refs/tags/app-v*` update/deletion
+ruleset are checked before private staging writes, before the source Release,
+and before public promotion. Do not grant `RELEASE_POLICY_TOKEN` write access
+or reuse an App, provider, device, or local CLI credential for it. Never delete
+or move an `app-v*` tag or replace a versioned image.
+
+After any write boundary, use GitHub's **Re-run failed jobs** for the same
+workflow run; do not re-run all jobs or start a fresh build. The run-specific
+staging names and 90-day evidence artifacts make partial draft upload,
+Release-attestation delay, partial tag promotion, signature/provenance failure,
+and an initially private public package resumable without rebuilding. A retry
+accepts only the same Release assets and version digest. If those artifacts
+expire, publish a new version rather than recreating immutable evidence.
+Immediately before writing the public tags, the promotion job also requires its
+immutable `app-v*` Release to be the newest published App Release. Consequently,
+a delayed retry from an older run fails closed instead of moving `latest`
+backward after a newer Release.
+
+A first public-package promotion may create a private GHCR package. In that
+case the source/evidence Release is already safely public; make only
+`ha-voice-hermes-gateway` public in package settings, leave every
+`*-staging-<run-id>` package private, and re-run the failed **Verify anonymous
+public installability** job. Before announcing the App, independently
+run `gh release verify app-v<version>` and `gh release verify-asset` for every
+downloaded asset, verify its signed checksums/attestations and exact versioned
+manifest without registry credentials, then install it from a clean Home
+Assistant App store.
+Factory/WebSerial firmware is a separately signed and physically validated
+firmware release; the App workflow does not invent or attach a factory binary.
+The full source, artifact, physical, and anonymous installation gates are in the
+root [release checklist](../docs/release-checklist.md).
 
 ## TLS setup
 

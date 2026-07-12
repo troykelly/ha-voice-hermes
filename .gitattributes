@@ -1,0 +1,5 @@
+# Third-party legal text is byte-preserved. Some upstream notices intentionally
+# contain trailing spaces; do not rewrite them or flag them as project style.
+ha_voice_hermes_gateway/licenses/wasm/THIRD_PARTY_NOTICES.md -text whitespace=-trailing-space
+ha_voice_hermes_gateway/licenses/container/*.txt -text whitespace=-trailing-space
+ha_voice_hermes_gateway/licenses/container/** -text whitespace=-trailing-space

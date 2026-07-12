@@ -530,7 +530,71 @@ audit_stopped_logs() {
   assert_secret_free "$logs" "$label shutdown logs"
 }
 
+assert_licence_inventory() {
+  # The notice check runs without mounts, credentials, network, or writable
+  # filesystem state so it audits only immutable image contents.
+  # This is intentionally a literal script evaluated inside the container.
+  # shellcheck disable=SC2016
+  "$DOCKER" run --rm \
+    --network none \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --entrypoint /bin/sh \
+    "$IMAGE" -eu -c '
+      root=/usr/share/licenses/ha-voice-hermes
+      test -s "$root/MIT.txt"
+      test -s "$root/Apache-2.0.txt"
+      test -s "$root/wasm/THIRD_PARTY_NOTICES.md"
+      test -s "$root/container/COMPONENTS.json"
+      test -s "$root/container/debian-sources.lock.json"
+      test -s "$root/container/workerd-rust/THIRD_PARTY_NOTICES.md"
+      test -s "$root/container/workerd-rust/UPSTREAM_CARGO.lock"
+      test -s "$root/container/workerd-native/LOCK.json"
+      test -s "$root/container/workerd-native/STATUS.md"
+      grep -Fq "UNICODE LICENSE V3" "$root/wasm/THIRD_PARTY_NOTICES.md"
+      grep -Fq "Copyright (c) 2013, Julien Schmidt" "$root/wasm/THIRD_PARTY_NOTICES.md"
+      grep -Fq "Registry crates inventoried: **234**" "$root/container/workerd-rust/THIRD_PARTY_NOTICES.md"
+      grep -Fq "Exact git packages inventoried: **7**" "$root/container/workerd-rust/THIRD_PARTY_NOTICES.md"
+      grep -Fq "Unresolved lockfile packages: **0**" "$root/container/workerd-rust/THIRD_PARTY_NOTICES.md"
+      grep -Fq "Copyright (c) 2019-2025 Franck Nijhof" "$root/container/bashio-0.17.5-MIT.txt"
+      grep -Fq "Copyright (c) 2021-2026 Laurent Bercot" "$root/container/s6-overlay-3.2.2.0-ISC.txt"
+      grep -Fq "Copyright (c) 2016 Thomas Pornin" "$root/container/bearssl-3d9be2f60b7764e46836514bcd6e453abdfa864a-MIT.txt"
+      jq -e '\''
+        .schema_version == 1 and
+        ([.components[].name] | length == 14) and
+        ([.components[].name] | index("workerd") != null)
+      '\'' "$root/container/COMPONENTS.json" >/dev/null
+      jq -e '\''
+        .schema_version == 1 and
+        .legal_gate.status == "covered" and
+        .unresolved == [] and
+        (.components | length == 24) and
+        (.blobs | length == 113) and
+        (.residual_limitations | length == 2) and
+        (.workerd.architectures | keys | sort) == ["linux-amd64", "linux-arm64"]
+      '\'' "$root/container/workerd-native/LOCK.json" >/dev/null
+      jq -e '\''
+        .schema_version == 1 and
+        .binary_package_count == 110 and
+        .source_package_count == 77 and
+        ([.sources[] | select(.name == "glibc")] | length == 1)
+      '\'' "$root/container/debian-sources.lock.json" >/dev/null
+      find "$root" -type f -exec sh -eu -c '\''
+        for file do
+          test "$(stat -c %a "$file")" = 444
+        done
+      '\'' sh {} +
+      for package in $(dpkg-query -W -f="\${Package}\n"); do
+        test -r "/usr/share/doc/${package}/copyright"
+      done
+    ' >/dev/null || fail "image licence inventory is absent, incomplete, or writable"
+
+  note "immutable WASM, container, and dpkg licence inventories are present"
+}
+
 readonly PRIMARY_NAME="hvh-smoke-${RANDOM}-$$"
+assert_licence_inventory
 start_good_container "$PRIMARY_NAME"
 PRIMARY_PORT=$(published_port "$PRIMARY_NAME") || fail "could not discover the published TLS port"
 readonly PRIMARY_PORT
